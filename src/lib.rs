@@ -1,5 +1,5 @@
-use git2::{Error, ErrorCode, Oid, Repository};
 use git_filter_tree::FilterTree as _;
+use git2::{Error, ErrorCode, Oid, Repository};
 
 /// Options that control mutating metadata operations.
 #[derive(Debug, Clone)]
@@ -48,14 +48,42 @@ pub trait MetadataIndex {
     fn metadata_get(&self, ref_name: &str, target: &Oid) -> Result<Option<Oid>, Error>;
 
     /// Set the raw metadata tree OID for a target.
-    /// Returns the new root tree OID committed under `ref_name`.
-    fn metadata_set(
+    ///
+    /// Builds the fanout index tree and returns the new root tree OID.
+    /// Does **not** commit; call [`Self::metadata_commit`] to persist.
+    fn metadata(
         &self,
         ref_name: &str,
         target: &Oid,
         tree: &Oid,
         opts: &MetadataOptions,
     ) -> Result<Oid, Error>;
+
+    /// Commit a new root tree OID to `ref_name` with the given message.
+    ///
+    /// Returns the new commit OID.
+    fn metadata_commit(&self, ref_name: &str, root: Oid, message: &str) -> Result<Oid, Error>;
+
+    /// Set the raw metadata tree OID for a target.
+    /// Returns the new root tree OID committed under `ref_name`.
+    ///
+    /// # Deprecated
+    ///
+    /// Use [`Self::metadata`] followed by [`Self::metadata_commit`] instead.
+    #[deprecated(since = "0.1.0", note = "use `metadata` + `metadata_commit` instead")]
+    fn metadata_set(
+        &self,
+        ref_name: &str,
+        target: &Oid,
+        tree: &Oid,
+        opts: &MetadataOptions,
+    ) -> Result<Oid, Error> {
+        #[allow(deprecated)]
+        let new_root = self.metadata(ref_name, target, tree, opts)?;
+        let msg = format!("metadata: set {} -> {}", target, tree);
+        self.metadata_commit(ref_name, new_root, &msg)?;
+        Ok(new_root)
+    }
 
     /// Show all entries in the metadata tree for a target.
     /// Returns leaf blob entries with their paths and content.
@@ -511,7 +539,6 @@ fn glob_match_recursive(pattern: &[&str], path: &[&str]) -> bool {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Implementation for git2::Repository
 // ---------------------------------------------------------------------------
@@ -533,7 +560,7 @@ impl MetadataIndex for Repository {
         Ok(detect_fanout(self, &root, target)?.map(|(_, _, oid)| oid))
     }
 
-    fn metadata_set(
+    fn metadata(
         &self,
         ref_name: &str,
         target: &Oid,
@@ -555,12 +582,11 @@ impl MetadataIndex for Repository {
             }
         }
 
-        let new_root = build_fanout(self, existing_root.as_ref(), &segments, &leaf, tree)?;
+        build_fanout(self, existing_root.as_ref(), &segments, &leaf, tree)
+    }
 
-        let msg = format!("metadata: set {} -> {}", target, tree);
-        commit_index(self, ref_name, new_root, &msg)?;
-
-        Ok(new_root)
+    fn metadata_commit(&self, ref_name: &str, root: Oid, message: &str) -> Result<Oid, Error> {
+        commit_index(self, ref_name, root, message)
     }
 
     fn metadata_show(&self, ref_name: &str, target: &Oid) -> Result<Vec<MetadataEntry>, Error> {
@@ -685,8 +711,7 @@ impl MetadataIndex for Repository {
         } else if new_meta_tree.id() == meta_oid {
             Ok(false)
         } else {
-            let new_root =
-                build_fanout(self, Some(&root), &segments, &leaf, &new_meta_tree.id())?;
+            let new_root = build_fanout(self, Some(&root), &segments, &leaf, &new_meta_tree.id())?;
             let msg = format!("metadata: remove paths from {}", target);
             commit_index(self, ref_name, new_root, &msg)?;
             Ok(true)

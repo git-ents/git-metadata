@@ -34,7 +34,8 @@ fn set_and_get() {
     let tree_oid = make_tree(&repo);
     let opts = MetadataOptions::default();
 
-    repo.metadata_set(REF, &target, &tree_oid, &opts).unwrap();
+    let root = repo.metadata(REF, &target, &tree_oid, &opts).unwrap();
+    repo.metadata_commit(REF, root, "metadata: set").unwrap();
 
     let got = repo.metadata_get(REF, &target).unwrap();
     assert_eq!(got, Some(tree_oid));
@@ -59,8 +60,9 @@ fn set_without_force_errors_on_duplicate() {
         ..Default::default()
     };
 
-    repo.metadata_set(REF, &target, &tree_oid, &opts).unwrap();
-    let result = repo.metadata_set(REF, &target, &tree_oid, &opts);
+    let root = repo.metadata(REF, &target, &tree_oid, &opts).unwrap();
+    repo.metadata_commit(REF, root, "metadata: set").unwrap();
+    let result = repo.metadata(REF, &target, &tree_oid, &opts);
     assert!(result.is_err());
 }
 
@@ -80,8 +82,10 @@ fn set_with_force_overwrites() {
         ..Default::default()
     };
 
-    repo.metadata_set(REF, &target, &tree1, &opts).unwrap();
-    repo.metadata_set(REF, &target, &tree2, &opts).unwrap();
+    let root1 = repo.metadata(REF, &target, &tree1, &opts).unwrap();
+    repo.metadata_commit(REF, root1, "metadata: set").unwrap();
+    let root2 = repo.metadata(REF, &target, &tree2, &opts).unwrap();
+    repo.metadata_commit(REF, root2, "metadata: set").unwrap();
 
     let got = repo.metadata_get(REF, &target).unwrap();
     assert_eq!(got, Some(tree2));
@@ -93,8 +97,10 @@ fn remove_existing() {
     let target = make_target(&repo);
     let tree_oid = make_tree(&repo);
 
-    repo.metadata_set(REF, &target, &tree_oid, &MetadataOptions::default())
+    let root = repo
+        .metadata(REF, &target, &tree_oid, &MetadataOptions::default())
         .unwrap();
+    repo.metadata_commit(REF, root, "metadata: set").unwrap();
 
     let removed = repo.metadata_remove(REF, &target).unwrap();
     assert!(removed);
@@ -126,8 +132,10 @@ fn list_entries() {
 
     let opts = MetadataOptions::default();
 
-    repo.metadata_set(REF, &t1, &tree1, &opts).unwrap();
-    repo.metadata_set(REF, &t2, &tree2, &opts).unwrap();
+    let root1 = repo.metadata(REF, &t1, &tree1, &opts).unwrap();
+    repo.metadata_commit(REF, root1, "metadata: set").unwrap();
+    let root2 = repo.metadata(REF, &t2, &tree2, &opts).unwrap();
+    repo.metadata_commit(REF, root2, "metadata: set").unwrap();
 
     let entries = repo.metadata_list(REF).unwrap();
     assert_eq!(entries.len(), 2);
@@ -145,7 +153,8 @@ fn cross_shard_level_get_and_remove() {
         shard_level: 3,
         force: false,
     };
-    repo.metadata_set(REF, &target, &tree_oid, &opts).unwrap();
+    let root = repo.metadata(REF, &target, &tree_oid, &opts).unwrap();
+    repo.metadata_commit(REF, root, "metadata: set").unwrap();
 
     let got = repo.metadata_get(REF, &target).unwrap();
     assert_eq!(got, Some(tree_oid));
@@ -167,13 +176,14 @@ fn force_detects_across_shard_levels() {
         shard_level: 2,
         force: false,
     };
-    repo.metadata_set(REF, &target, &tree_oid, &opts2).unwrap();
+    let root = repo.metadata(REF, &target, &tree_oid, &opts2).unwrap();
+    repo.metadata_commit(REF, root, "metadata: set").unwrap();
 
     let opts1 = MetadataOptions {
         shard_level: 1,
         force: false,
     };
-    let result = repo.metadata_set(REF, &target, &tree_oid, &opts1);
+    let result = repo.metadata(REF, &target, &tree_oid, &opts1);
     assert!(result.is_err());
 }
 
