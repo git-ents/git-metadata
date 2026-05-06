@@ -3,7 +3,11 @@
 *Porcelain for adding metadata to any object without rewriting history.*
 
 > [!CAUTION]
-> This project has moved to [`git-data`](https://github.com/git-ents/git-data)!
+> This project is in active development.
+> There are surely bugs and misbehaviors that have not yet been discovered.
+> Please file a [new issue] for any misbehaviors you find!
+
+[new issue]: https://github.com/git-ents/git-data/issues/new
 
 ## Overview
 
@@ -63,6 +67,18 @@ git metadata prune -n  # dry run
 
 # Print the metadata ref name
 git metadata get-ref
+
+# Create a bidirectional link between two keys
+git metadata link issue:42 commit:abc1234 --forward closes --reverse closed-by
+
+# Remove a bidirectional link
+git metadata unlink issue:42 commit:abc1234 --forward closes --reverse closed-by
+
+# List all links for a key
+git metadata linked issue:42
+
+# List links filtered by relation
+git metadata linked issue:42 --relation closes
 
 # Use a custom ref
 git metadata --ref refs/metadata/custom add labels/bug
