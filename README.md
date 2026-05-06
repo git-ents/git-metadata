@@ -7,7 +7,7 @@
 > There are surely bugs and misbehaviors that have not yet been discovered.
 > Please file a [new issue] for any misbehaviors you find!
 
-[new issue]: https://github.com/git-ents/git-data/issues/new
+[new issue]: https://github.com/git-ents/git-metadata/issues/new
 
 ## Overview
 

@@ -6,8 +6,8 @@ publish = true
 readme = "README.md"
 license = "MIT OR Apache-2.0"
 description = "Porcelain for adding metadata to any git object without rewriting history."
-repository = "https://github.com/git-ents/git-data"
-homepage = "https://github.com/git-ents/git-data"
+repository = "https://github.com/git-ents/git-metadata"
+homepage = "https://github.com/git-ents/git-metadata"
 documentation = "https://docs.rs/git-metadata"
 
 [[bin]]
