@@ -18,7 +18,7 @@ The `metadata` command follows `notes` semantics.
 [Notes] are a tragically underutilized feature of Git.
 For more information about `git notes` entries, Tyler Cipriani's [blog post] is an excellent introduction, and some highly-motivating examples.
 One such example is Google's open-source [`git-appraise`] project, which stores code review metadata as structured entries in a note blob.
-While impressive, that design highlights a limitation of notes: structured data, or data that does not map cleanly onto UTF-8 text, is difficult to represent in a blob format.
+While functional, that design highlights a limitation of notes: structured data, or data that does not map cleanly onto UTF-8 text, is difficult to represent in a blob format.
 The `git-metadata` project provides a structured alternative to the notes-blob design using Git trees objects.
 Just like notes, metadata added to an object does not alter the object's history.
 
