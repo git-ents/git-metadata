@@ -224,7 +224,6 @@ dependencies = [
  "clap",
  "clap_mangen",
  "git-filter-tree",
- "git2",
  "tempfile",
 ]
 
