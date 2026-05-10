@@ -15,9 +15,11 @@ name = "git-metadata"
 path = "src/main.rs"
 
 [dependencies]
+anyhow = "1.0.102"
 clap = { version = "4.5.60", features = ["derive"] }
 clap_mangen = "0.2.31"
-git-filter-tree = "0.3.1"
+gix = "0.83.0"
+thiserror = "2.0.18"
 
 [dev-dependencies]
 tempfile = "3.27.0"
