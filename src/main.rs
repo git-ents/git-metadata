@@ -1,7 +1,7 @@
 mod cli;
 mod exe;
 
-use clap::{CommandFactory, Parser};
+use clap::Parser;
 use cli::Cli;
 use std::path::PathBuf;
 use std::process;
@@ -23,10 +23,11 @@ fn main() {
     }
 }
 
-fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
+fn run(_cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     todo!()
 }
 
+#[allow(dead_code)]
 fn atty_stdin() -> bool {
     todo!()
 }
@@ -35,14 +36,16 @@ fn parse_generate_man_flag() -> Option<PathBuf> {
     todo!()
 }
 
+#[allow(dead_code)]
 fn default_man_dir() -> PathBuf {
     todo!()
 }
 
-fn generate_man_page(output_dir: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn generate_man_page(_output_dir: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     todo!()
 }
 
-fn manpath_covers(dir: &std::path::Path) -> bool {
+#[allow(dead_code)]
+fn manpath_covers(_dir: &std::path::Path) -> bool {
     todo!()
 }
