@@ -38,8 +38,50 @@ impl MetadataRepository for Repository {
 
     /// Walks the fanout tree at `metadatas_ref` breadth-first and verifies each
     /// leaf via [`Metadata::new`]. Fails fast on the first invalid leaf.
-    fn metadatas(&self, _metadatas_ref: Option<&str>) -> Result<Vec<Metadata>, Error> {
-        todo!()
+    fn metadatas(&self, metadatas_ref: Option<&str>) -> Result<Vec<Metadata>, Error> {
+        let default_ref;
+        let metadatas_ref = match metadatas_ref {
+            Some(r) => r,
+            None => {
+                default_ref = self.metadata_default_ref()?;
+                &default_ref
+            }
+        };
+        let root = self
+            .find_reference(metadatas_ref)
+            .map_err(|_| todo!("resolve {metadatas_ref:?} to a tree id"))?
+            .id()
+            .detach();
+        let hash_hex_len = root.kind().len_in_hex();
+        let tree = self
+            .find_object(root)
+            .map_err(|_| Error::NotFound(root))?
+            .into_tree();
+        let entries = tree
+            .traverse()
+            .breadthfirst
+            .files()
+            .map_err(|_| Error::NotFound(root))?;
+        let mut out = Vec::new();
+        for entry in entries {
+            if !entry.mode.is_tree() {
+                continue;
+            }
+            let hex: Vec<u8> = entry
+                .filepath
+                .iter()
+                .copied()
+                .filter(|b| *b != b'/')
+                .collect();
+            if hex.len() != hash_hex_len {
+                continue;
+            }
+            let Ok(id) = gix::ObjectId::from_hex(&hex) else {
+                continue;
+            };
+            out.push(Metadata::new(self, id, entry.oid)?);
+        }
+        Ok(out)
     }
 
     fn find_metadata(
