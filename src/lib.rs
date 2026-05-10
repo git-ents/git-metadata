@@ -11,9 +11,28 @@ pub enum Error {
     InconsistentFanout,
 }
 
+/// A `gix::ObjectId` guaranteed to refer to a tree object.
+///
+/// Only constructible via `From<gix::Tree<'_>>`, providing compile-time proof
+/// that the ID was obtained from a verified tree object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TreeId(gix::ObjectId);
+
+impl<'repo> From<gix::Tree<'repo>> for TreeId {
+    fn from(tree: gix::Tree<'repo>) -> Self {
+        Self(tree.id)
+    }
+}
+
+impl From<TreeId> for gix::ObjectId {
+    fn from(tree: TreeId) -> Self {
+        tree.0
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct Metadata {
-    pub tree: gix::ObjectId,
+    pub tree: TreeId,
 }
 
 /// Interact with metadata refs in a Git repository.
