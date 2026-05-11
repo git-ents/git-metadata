@@ -1,4 +1,10 @@
 //! Parameterized leaf-shape classification (default depth = 1, i.e. 2/38).
+//
+// For more information about table-driven testing, see the [`rstest`][rstest] documentation
+// and Dave Chaney's [blog post].
+//
+// [rstest]: https://docs.rs/rstest/latest/rstest/
+// [blog post]: https://dave.cheney.net/2019/05/07/prefer-table-driven-tests
 
 use super::helpers::*;
 use git_metadata::MetadataRepository;
