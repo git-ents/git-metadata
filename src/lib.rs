@@ -5,11 +5,12 @@ mod metadata;
 mod repository;
 
 pub use error::Error;
-pub use gix::Repository;
 pub use metadata::Metadata;
 pub use repository::MetadataRepository;
 
-impl MetadataRepository for Repository {
+use gix::bstr::ByteSlice;
+
+impl MetadataRepository for gix::Repository {
     fn metadata(
         &self,
         _author: gix::actor::SignatureRef<'_>,
@@ -39,46 +40,52 @@ impl MetadataRepository for Repository {
     /// Walks the fanout tree at `metadatas_ref` breadth-first and verifies each
     /// leaf via [`Metadata::new`]. Fails fast on the first invalid leaf.
     fn metadatas(&self, metadatas_ref: Option<&str>) -> Result<Vec<Metadata>, Error> {
-        let default_ref;
         let metadatas_ref = match metadatas_ref {
             Some(r) => r,
-            None => {
-                default_ref = self.metadata_default_ref()?;
-                &default_ref
-            }
+            None => &self.metadata_default_ref()?,
         };
-        let root = self
-            .find_reference(metadatas_ref)
-            .map_err(|_| todo!("resolve {metadatas_ref:?} to a tree id"))?
-            .id()
-            .detach();
-        let hash_hex_len = root.kind().len_in_hex();
-        let tree = self
-            .find_object(root)
-            .map_err(|_| Error::NotFound(root))?
-            .into_tree();
-        let entries = tree
-            .traverse()
-            .breadthfirst
-            .files()
-            .map_err(|_| Error::NotFound(root))?;
+
+        let tree = self.find_reference(metadatas_ref)?.peel_to_tree()?;
+
+        // TODO
+        // We ASSUME the fanout tree uses the same hash kind as the repository.
+        // Is this a safe assumption?
+        let hash_hex_len = tree.id.kind().len_in_hex();
+        let entries = tree.traverse().breadthfirst.files()?;
         let mut out = Vec::new();
+
+        // We use a pre-allocated buffer to avoid allocations during iteration.
+        let mut hex: Vec<u8> = Vec::with_capacity(hash_hex_len);
+
         for entry in entries {
             if !entry.mode.is_tree() {
                 continue;
             }
-            let hex: Vec<u8> = entry
-                .filepath
-                .iter()
-                .copied()
-                .filter(|b| *b != b'/')
-                .collect();
-            if hex.len() != hash_hex_len {
+
+            // Clear the pre-allocated buffer.
+            hex.clear();
+
+            let mut hex_only = true;
+            // PERF
+            // We use `split_str` here because the literal `b"/"` reads more
+            // clearly than a predicate. If this loop ever shows up as a hot
+            // path, consider switching to `entry.filepath.split(|b| *b == b'/')`:
+            // the slice method compiles down to a single-byte compare per
+            // element, whereas `split_str` runs a general substring search
+            // that is heavier than necessary for a one-byte separator.
+            for seg in entry.filepath.split_str(b"/") {
+                if !seg.iter().all(u8::is_ascii_hexdigit) {
+                    hex_only = false;
+                    break;
+                }
+                hex.extend_from_slice(seg);
+            }
+            if !hex_only || hex.len() != hash_hex_len {
                 continue;
             }
-            let Ok(id) = gix::ObjectId::from_hex(&hex) else {
-                continue;
-            };
+            let id = gix::ObjectId::from_hex(&hex).map_err(|_| Error::InvalidFanoutLeaf {
+                path: entry.filepath.clone(),
+            })?;
             out.push(Metadata::new(self, id, entry.oid)?);
         }
         Ok(out)

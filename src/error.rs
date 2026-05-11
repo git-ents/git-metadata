@@ -7,4 +7,12 @@ pub enum Error {
     InvalidType(gix::object::Kind),
     #[error("hash kind {0} is not supported yet")]
     UnsupportedHashKind(gix::ObjectId, gix::hash::Kind),
+    #[error("invalid fanout leaf at {path:?}")]
+    InvalidFanoutLeaf { path: gix::bstr::BString },
+    #[error(transparent)]
+    Reference(#[from] gix::reference::find::existing::Error),
+    #[error(transparent)]
+    Peel(#[from] gix::reference::peel::to_kind::Error),
+    #[error(transparent)]
+    Traverse(#[from] gix::traverse::tree::breadthfirst::Error),
 }
