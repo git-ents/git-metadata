@@ -18,10 +18,10 @@ pub struct Metadata {
     /// The [`ObjectId`] references a tree that must remain reachable within its
     /// repository for the lifetime of the [`Metadata`] instance. Removing the
     /// tree (e.g. via garbage collection) before the instance is dropped is
-    /// considered a [logic] error.
+    /// considered a logic ([TOCTOU]) error.
     ///
     /// [`ObjectId`]: gix::ObjectId
-    /// [logic]: https://en.wikipedia.org/wiki/Time-of-check_to_time-of-use
+    /// [TOCTOU]: https://en.wikipedia.org/wiki/Time-of-check_to_time-of-use
     data: gix::ObjectId,
 }
 
