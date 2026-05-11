@@ -12,35 +12,6 @@ pub use repository::MetadataRepository;
 /// metadata tree. Matches the git-notes shape (one 2-byte directory level).
 pub const DEFAULT_FANOUT: u8 = 1;
 
-fn read_fanout_depth(
-    repo: &gix::Repository,
-    tree: &gix::Tree<'_>,
-    hash_hex_len: usize,
-) -> Result<u8, Error> {
-    let Some(entry) = tree.find_entry(".fanout") else {
-        return Ok(DEFAULT_FANOUT);
-    };
-    if entry.mode().is_tree() {
-        return Err(Error::InvalidFanoutDepth {
-            value: gix::bstr::BString::from(&b"<tree>"[..]),
-        });
-    }
-    let blob = repo.find_blob(entry.oid())?;
-    let text =
-        std::str::from_utf8(blob.data.trim_ascii()).map_err(|_| Error::InvalidFanoutDepth {
-            value: gix::bstr::BString::from(blob.data.clone()),
-        })?;
-    let depth: u8 = text.parse().map_err(|_| Error::InvalidFanoutDepth {
-        value: gix::bstr::BString::from(text.as_bytes()),
-    })?;
-    if !(1..=19).contains(&depth) || (2 * depth as usize) >= hash_hex_len {
-        return Err(Error::InvalidFanoutDepth {
-            value: gix::bstr::BString::from(text.as_bytes()),
-        });
-    }
-    Ok(depth)
-}
-
 impl MetadataRepository for gix::Repository {
     fn metadata(
         &self,
@@ -56,6 +27,41 @@ impl MetadataRepository for gix::Repository {
 
     fn metadata_default_ref(&self) -> Result<String, Error> {
         Ok("refs/metadata/commits".to_string())
+    }
+
+    fn metadata_ref_fanout(&self, metadatas_ref: Option<&str>) -> Result<u8, Error> {
+        let default_ref;
+        let metadatas_ref = match metadatas_ref {
+            Some(r) => r,
+            None => {
+                default_ref = self.metadata_default_ref()?;
+                &default_ref
+            }
+        };
+        let tree = self.find_reference(metadatas_ref)?.peel_to_tree()?;
+        let hash_hex_len = tree.id.kind().len_in_hex();
+        let Some(entry) = tree.find_entry(".fanout") else {
+            return Ok(DEFAULT_FANOUT);
+        };
+        if !entry.mode().is_blob() {
+            return Err(Error::InvalidFanoutDepth {
+                value: gix::bstr::BString::from(format!("<{}>", entry.mode().as_str()).as_bytes()),
+            });
+        }
+        let blob = self.find_blob(entry.oid())?;
+        let text =
+            std::str::from_utf8(blob.data.trim_ascii()).map_err(|_| Error::InvalidFanoutDepth {
+                value: gix::bstr::BString::from(blob.data.clone()),
+            })?;
+        let depth: u8 = text.parse().map_err(|_| Error::InvalidFanoutDepth {
+            value: gix::bstr::BString::from(text.as_bytes()),
+        })?;
+        if !(1..=19).contains(&depth) || (2 * depth as usize) >= hash_hex_len {
+            return Err(Error::InvalidFanoutDepth {
+                value: gix::bstr::BString::from(text.as_bytes()),
+            });
+        }
+        Ok(depth)
     }
 
     fn metadata_delete(
@@ -85,9 +91,9 @@ impl MetadataRepository for gix::Repository {
             }
         };
 
+        let depth = self.metadata_ref_fanout(Some(metadatas_ref))?;
         let tree = self.find_reference(metadatas_ref)?.peel_to_tree()?;
         let hash_hex_len = tree.id.kind().len_in_hex();
-        let depth = read_fanout_depth(self, &tree, hash_hex_len)?;
 
         let prefix_segs = depth as usize;
         let leaf_seg_len = hash_hex_len - 2 * prefix_segs;

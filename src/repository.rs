@@ -48,6 +48,24 @@ pub trait MetadataRepository {
     /// ```
     fn metadata_default_ref(&self) -> Result<String, Error>;
 
+    /// Returns the fanout depth for the tree at `metadatas_ref`.
+    ///
+    /// When `metadatas_ref` is `None`, [`metadata_default_ref`] is used. The
+    /// depth is read from a `.fanout` blob at the root of the tree, which
+    /// must contain a decimal integer in `1..=19` whose two-hex-character
+    /// segments leave at least one hex character for the leaf name. When the
+    /// blob is absent, depth defaults to [`DEFAULT_FANOUT`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Reference`] if the ref does not exist, or
+    /// [`Error::InvalidFanoutDepth`] if the `.fanout` entry is a tree or
+    /// the blob contents are not a valid depth.
+    ///
+    /// [`metadata_default_ref`]: MetadataRepository::metadata_default_ref
+    /// [`DEFAULT_FANOUT`]: crate::DEFAULT_FANOUT
+    fn metadata_ref_fanout(&self, metadatas_ref: Option<&str>) -> Result<u8, Error>;
+
     fn metadata_delete(
         &self,
         id: gix::ObjectId,
