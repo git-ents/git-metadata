@@ -44,8 +44,8 @@ impl MetadataRepository for gix::Repository {
             return Ok(DEFAULT_FANOUT);
         };
         if !entry.mode().is_blob() {
-            return Err(Error::InvalidFanoutDepth {
-                value: gix::bstr::BString::from(format!("<{}>", entry.mode().as_str()).as_bytes()),
+            return Err(Error::InvalidFanoutType {
+                kind: entry.mode().as_str().to_string(),
             });
         }
         let blob = self.find_blob(entry.oid())?;

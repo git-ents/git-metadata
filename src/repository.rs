@@ -58,9 +58,10 @@ pub trait MetadataRepository {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Reference`] if the ref does not exist, or
-    /// [`Error::InvalidFanoutDepth`] if the `.fanout` entry is a tree or
-    /// the blob contents are not a valid depth.
+    /// Returns [`Error::Reference`] if the ref does not exist,
+    /// [`Error::InvalidFanoutType`] if the `.fanout` entry is not a blob,
+    /// or [`Error::InvalidFanoutDepth`] if the blob contents are not a
+    /// valid depth.
     ///
     /// [`metadata_default_ref`]: MetadataRepository::metadata_default_ref
     /// [`DEFAULT_FANOUT`]: crate::DEFAULT_FANOUT

@@ -11,6 +11,8 @@ pub enum Error {
     InvalidFanoutLeaf { path: gix::bstr::BString },
     #[error("invalid `.fanout` depth {value:?}; must be a decimal integer in 1..=19")]
     InvalidFanoutDepth { value: gix::bstr::BString },
+    #[error("invalid `.fanout` entry type `{kind}`; must be a blob")]
+    InvalidFanoutType { kind: String },
     #[error(transparent)]
     FanoutFind(#[from] gix::object::find::existing::with_conversion::Error),
     #[error(transparent)]

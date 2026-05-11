@@ -8,5 +8,7 @@ mod metadatas {
     mod examples;
     mod fanout;
     mod property;
+    mod ref_fanout_property;
+    mod ref_fanout_table;
     mod table;
 }
