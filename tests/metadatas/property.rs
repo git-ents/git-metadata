@@ -52,23 +52,21 @@ proptest! {
         }
 
         // Build the legitimate fanout, then graft noise siblings at root.
-        let mut root = Node::dir();
+        let mut entries: Vec<(Vec<gix::bstr::BString>, EntryKind, gix::ObjectId)> = Vec::new();
         if let Some(d) = depth {
             let fanout_blob = blob(&repo, d.to_string().as_bytes());
-            root.insert(&[b".fanout" as &[u8]], Node::BlobRef(fanout_blob));
+            entries.push((vec![".fanout".into()], EntryKind::Blob, fanout_blob));
         }
         let effective_depth = depth.unwrap_or(1) as usize;
         for (id, d_oid) in &leaves {
             let hex = hex_of(*id);
-            let segs = fanout_segments(&hex, effective_depth);
-            let seg_refs: Vec<&[u8]> = segs.iter().map(|s| s.as_slice()).collect();
-            root.insert(&seg_refs, Node::TreeRef(*d_oid));
+            entries.push((fanout_segments(&hex, effective_depth), EntryKind::Tree, *d_oid));
         }
         // Noise: non-hex name, too-short hex, blob-mode at a plausible path.
-        root.insert(&[b"README" as &[u8]], Node::BlobRef(noise_blob));
-        root.insert(&[b"docs" as &[u8]], Node::TreeRef(data));
-        root.insert(&[b"abc" as &[u8]], Node::TreeRef(data));
-        let root_id = write_tree(&repo, &root);
+        entries.push((vec!["README".into()], EntryKind::Blob, noise_blob));
+        entries.push((vec!["docs".into()], EntryKind::Tree, data));
+        entries.push((vec!["abc".into()], EntryKind::Tree, data));
+        let root_id = write_tree(&repo, entries);
         set_ref(&repo, root_id);
 
         let got = repo.metadatas(Some(FANOUT_REF)).expect("metadatas");

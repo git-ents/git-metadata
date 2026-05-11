@@ -6,7 +6,7 @@ use git_metadata::{Error, MetadataRepository};
 #[test]
 fn empty_fanout_tree_returns_empty_vec() {
     let (_dir, repo) = init_repo();
-    let root = write_tree(&repo, &Node::dir());
+    let root = write_tree(&repo, vec![]);
     set_ref(&repo, root);
 
     let got = repo.metadatas(Some(FANOUT_REF)).expect("metadatas");
@@ -68,9 +68,10 @@ fn data_tree_with_non_hex_children_does_not_pollute_results() {
     let (_dir, repo) = init_repo();
     let inner_blob = blob(&repo, b"inside");
 
-    let mut data_node = Node::dir();
-    data_node.insert(&[b"file.txt" as &[u8]], Node::BlobRef(inner_blob));
-    let data = write_tree(&repo, &data_node);
+    let data = write_tree(
+        &repo,
+        vec![(vec!["file.txt".into()], EntryKind::Blob, inner_blob)],
+    );
 
     let blob_id = blob(&repo, b"outer");
     let root = write_fanout(&repo, None, &[(blob_id, data)]);

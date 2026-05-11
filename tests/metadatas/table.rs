@@ -38,23 +38,20 @@ fn leaf_classification(#[case] name: Name, #[case] as_tree: bool, #[case] expect
     let blob_id = blob(&repo, b"v");
     let data = empty_tree(&repo);
 
-    let path_owned: Vec<Vec<u8>> = match name {
+    let path: Vec<gix::bstr::BString> = match name {
         Name::ValidShape => {
             let hex = hex_of(blob_id);
-            vec![hex[0..2].to_vec(), hex[2..].to_vec()]
+            vec![hex[0..2].into(), hex[2..].into()]
         }
-        Name::Literal(parts) => parts.iter().map(|p| p.to_vec()).collect(),
+        Name::Literal(parts) => parts.iter().map(|p| (*p).into()).collect(),
     };
-    let path_refs: Vec<&[u8]> = path_owned.iter().map(|s| s.as_slice()).collect();
-    let child = if as_tree {
-        Node::TreeRef(data)
+    let (kind, oid) = if as_tree {
+        (EntryKind::Tree, data)
     } else {
-        Node::BlobRef(blob(&repo, b"payload"))
+        (EntryKind::Blob, blob(&repo, b"payload"))
     };
 
-    let mut root = Node::dir();
-    root.insert(&path_refs, child);
-    let root_id = write_tree(&repo, &root);
+    let root_id = write_tree(&repo, vec![(path, kind, oid)]);
     set_ref(&repo, root_id);
 
     let got = repo.metadatas(Some(FANOUT_REF)).expect("metadatas");

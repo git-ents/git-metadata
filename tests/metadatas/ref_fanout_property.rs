@@ -6,9 +6,10 @@ use proptest::prelude::*;
 
 fn write_fanout_root(repo: &gix::Repository, content: &[u8]) -> gix::ObjectId {
     let fanout = blob(repo, content);
-    let mut root = Node::dir();
-    root.insert(&[b".fanout" as &[u8]], Node::BlobRef(fanout));
-    write_tree(repo, &root)
+    write_tree(
+        repo,
+        vec![(vec![".fanout".into()], EntryKind::Blob, fanout)],
+    )
 }
 
 proptest! {

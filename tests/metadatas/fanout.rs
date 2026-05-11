@@ -11,13 +11,14 @@ fn fanout_blob_with_trailing_newline_is_accepted() {
     let data = empty_tree(&repo);
 
     let fanout = blob(&repo, b"2\n");
-    let mut root = Node::dir();
-    root.insert(&[b".fanout" as &[u8]], Node::BlobRef(fanout));
     let hex = hex_of(blob_id);
-    let segs = fanout_segments(&hex, 2);
-    let seg_refs: Vec<&[u8]> = segs.iter().map(|s| s.as_slice()).collect();
-    root.insert(&seg_refs, Node::TreeRef(data));
-    let root_id = write_tree(&repo, &root);
+    let root_id = write_tree(
+        &repo,
+        vec![
+            (vec![".fanout".into()], EntryKind::Blob, fanout),
+            (fanout_segments(&hex, 2), EntryKind::Tree, data),
+        ],
+    );
     set_ref(&repo, root_id);
 
     let got = repo.metadatas(Some(FANOUT_REF)).expect("metadatas");
