@@ -9,6 +9,10 @@ pub enum Error {
     UnsupportedHashKind(gix::ObjectId, gix::hash::Kind),
     #[error("invalid fanout leaf at {path:?}")]
     InvalidFanoutLeaf { path: gix::bstr::BString },
+    #[error("invalid `.fanout` depth {value:?}; must be a decimal integer in 1..=19")]
+    InvalidFanoutDepth { value: gix::bstr::BString },
+    #[error(transparent)]
+    FanoutFind(#[from] gix::object::find::existing::with_conversion::Error),
     #[error(transparent)]
     Reference(#[from] gix::reference::find::existing::Error),
     #[error(transparent)]
