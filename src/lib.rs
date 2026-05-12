@@ -150,14 +150,11 @@ impl MetadataRepository for gix::Repository {
     }
 
     fn metadata_ref_fanout(&self, metadatas_ref: Option<&str>) -> Result<u8, Error> {
-        let default_ref;
         let metadatas_ref = match metadatas_ref {
             Some(r) => r,
-            None => {
-                default_ref = self.metadata_default_ref()?;
-                &default_ref
-            }
+            None => &self.metadata_default_ref()?,
         };
+
         let tree = self.find_reference(metadatas_ref)?.peel_to_tree()?;
         let hash_hex_len = tree.id.kind().len_in_hex();
         let Some(entry) = tree.find_entry(".fanout") else {
@@ -195,13 +192,9 @@ impl MetadataRepository for gix::Repository {
     }
 
     fn metadatas(&self, metadatas_ref: Option<&str>) -> Result<Vec<Metadata>, Error> {
-        let default_ref;
         let metadatas_ref = match metadatas_ref {
             Some(r) => r,
-            None => {
-                default_ref = self.metadata_default_ref()?;
-                &default_ref
-            }
+            None => &self.metadata_default_ref()?,
         };
 
         let depth = self.metadata_ref_fanout(Some(metadatas_ref))?;
