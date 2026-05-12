@@ -60,6 +60,22 @@ impl Metadata {
             data: verify(repo, data, gix::object::Kind::Tree)?,
         })
     }
+
+    /// Returns the annotated object's id, which is used as the fanout key
+    /// when locating this entry under a metadata ref.
+    pub fn id(&self) -> gix::ObjectId {
+        self.id
+    }
+
+    /// Returns the id of the tree holding this entry's metadata content.
+    ///
+    /// Verified to exist at [`Self::new`] time; removing the tree before this
+    /// [`Metadata`] is dropped is a [TOCTOU] logic error.
+    ///
+    /// [TOCTOU]: https://en.wikipedia.org/wiki/Time-of-check_to_time-of-use
+    pub fn data(&self) -> gix::ObjectId {
+        self.data
+    }
 }
 
 fn verify(
