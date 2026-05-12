@@ -1,4 +1,49 @@
 //! Relate data of any shape to Git objects.
+//!
+//! `git-metadata` attaches arbitrary tree-shaped data to any Git object,
+//! mirroring the storage model used by `git notes` but generalized: where a
+//! note is a single blob keyed by the annotated object's id, a metadata entry
+//! is a tree keyed the same way. This lets callers attach structured data
+//! (multiple files, nested directories) to commits, blobs, trees, or tags
+//! without inventing their own ref layout.
+//!
+//! # Model
+//!
+//! Entries live under a Git ref (default `refs/metadata/commits`, see
+//! [`MetadataRepository::metadata_default_ref`]). The ref points at a commit
+//! whose tree is the *fanout tree*: a directory tree that maps an annotated
+//! object's hash to a stored metadata tree by splitting the hex id into 2-byte
+//! prefix segments. The number of prefix segments is the *fanout depth*, read
+//! from a `.fanout` blob at the root of the tree and defaulting to
+//! [`DEFAULT_FANOUT`] (the git-notes shape: `ab/cdef…`).
+//!
+//! See [`MetadataRepository`] for the full description of the fanout layout
+//! and the per-method contracts.
+//!
+//! # Example
+//!
+//! Attach a metadata tree to a blob and read it back:
+//!
+//! ```
+//! use git_metadata::MetadataRepository;
+//!
+//! let dir = tempfile::tempdir().expect("tempdir");
+//! let repo = gix::init(dir.path()).expect("init repository");
+//!
+//! let target = repo.write_blob(b"hello")?.detach();
+//! let metadata = repo.write_object(gix::objs::Tree::empty())?.detach();
+//!
+//! let sig = gix::actor::SignatureRef {
+//!     name: "Tester".into(),
+//!     email: "t@example.com".into(),
+//!     time: "0 +0000".into(),
+//! };
+//! repo.metadata(sig, sig, None, target, &metadata, false)?;
+//!
+//! let entries = repo.metadatas(None)?;
+//! assert_eq!(entries.len(), 1);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 mod error;
 mod metadata;
@@ -149,13 +194,6 @@ impl MetadataRepository for gix::Repository {
         todo!()
     }
 
-    /// Walks the fanout tree at `metadatas_ref` and verifies each leaf via
-    /// [`Metadata::new`]. Fails fast on the first invalid leaf.
-    ///
-    /// The fanout depth (number of 2-hex-character directory levels) is read
-    /// from a `.fanout` blob at the root of the tree. The blob must contain a
-    /// decimal integer in `1..=19`. If the blob is absent, depth defaults to
-    /// `1` (git-notes shape: `ab/cdef...`).
     fn metadatas(&self, metadatas_ref: Option<&str>) -> Result<Vec<Metadata>, Error> {
         let default_ref;
         let metadatas_ref = match metadatas_ref {
