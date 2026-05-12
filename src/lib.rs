@@ -237,9 +237,33 @@ impl MetadataRepository for gix::Repository {
 
     fn find_metadata(
         &self,
-        _metadatas_ref: Option<&str>,
-        _id: gix::ObjectId,
+        metadatas_ref: Option<&str>,
+        id: gix::ObjectId,
     ) -> Result<gix::ObjectId, Error> {
-        todo!()
+        let metadatas_ref = match metadatas_ref {
+            Some(r) => r,
+            None => &self.metadata_default_ref()?,
+        };
+
+        let depth = self.metadata_ref_fanout(Some(metadatas_ref))?;
+        let path = tree::fanout_path(id, depth);
+        let mut tree = self.find_reference(metadatas_ref)?.peel_to_tree()?;
+        let (leaf, segs) = path
+            .split_last()
+            .expect("fanout_path yields depth + 1 segments");
+        for seg in segs {
+            let entry = tree.find_entry(seg.as_slice()).ok_or(Error::NotFound(id))?;
+            if !entry.mode().is_tree() {
+                return Err(Error::FanoutPathConflict(seg.clone()));
+            }
+            tree = self.find_tree(entry.oid())?;
+        }
+        let entry = tree
+            .find_entry(leaf.as_slice())
+            .ok_or(Error::NotFound(id))?;
+        if !entry.mode().is_tree() {
+            return Err(Error::FanoutPathConflict(leaf.clone()));
+        }
+        Ok(entry.oid().into())
     }
 }

@@ -167,8 +167,12 @@ pub trait MetadataRepository {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::NotFound`] if no leaf exists for `id`, or
-    /// [`Error::Gix`] for any underlying `gix` failure.
+    /// Returns [`Error::NotFound`] if no leaf exists for `id`,
+    /// [`Error::FanoutPathConflict`] if a non-tree entry occupies a path
+    /// segment along the fanout, or [`Error::Gix`] for any underlying `gix`
+    /// failure. The leaf entry's mode is checked to be a tree, but the
+    /// referenced object is not fetched to confirm it parses as one; pass
+    /// the returned id to [`Metadata::new`] if you need that invariant.
     ///
     /// [`metadata_default_ref`]: MetadataRepository::metadata_default_ref
     fn find_metadata(

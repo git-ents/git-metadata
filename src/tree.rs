@@ -4,6 +4,9 @@ use crate::Error;
 
 /// Split the hex representation of `oid` into `depth` 2-char prefix segments
 /// followed by one leaf segment of the remaining hex characters.
+///
+/// The returned vector always has length `depth + 1`; callers may rely on
+/// at least one element being present.
 pub(crate) fn fanout_path(oid: gix::ObjectId, depth: u8) -> Vec<gix::bstr::BString> {
     let hex = oid.to_hex().to_string();
     let hex = hex.as_bytes();
