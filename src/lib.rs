@@ -5,6 +5,9 @@ mod metadata;
 mod repository;
 mod tree;
 
+#[cfg(test)]
+mod tests;
+
 pub use error::Error;
 pub use metadata::Metadata;
 pub use repository::MetadataRepository;

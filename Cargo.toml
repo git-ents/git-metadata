@@ -22,6 +22,7 @@ gix = "0.83.0"
 thiserror = "2.0.18"
 
 [dev-dependencies]
+gix = { version = "0.83.0", features = ["sha256"] }
 proptest = "1.5.0"
 rstest = "0.23.0"
 tempfile = "3.27.0"
