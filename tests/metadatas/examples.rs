@@ -1,6 +1,6 @@
 //! Example-based tests.
 
-use super::helpers::*;
+use crate::common::*;
 use git_metadata::{Error, MetadataRepository};
 
 #[test]

@@ -1,6 +1,6 @@
 //! Tests for `metadata_default_ref` and the `metadatas(None)` fallthrough.
 
-use super::helpers::*;
+use crate::common::*;
 use git_metadata::MetadataRepository;
 
 const DEFAULT_REF: &str = "refs/metadata/commits";

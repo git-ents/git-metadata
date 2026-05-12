@@ -1,6 +1,6 @@
 //! Table-driven tests for `MetadataRepository::metadata_ref_fanout`.
 
-use super::helpers::*;
+use crate::common::*;
 use git_metadata::{DEFAULT_FANOUT, Error, MetadataRepository};
 use gix::objs::tree::{Entry, EntryKind};
 use rstest::rstest;

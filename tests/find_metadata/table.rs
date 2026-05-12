@@ -1,6 +1,6 @@
 //! Table-driven tests for `MetadataRepository::find_metadata`.
 
-use super::helpers::*;
+use crate::common::*;
 use git_metadata::MetadataRepository;
 use rstest::rstest;
 

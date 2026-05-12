@@ -1,9 +1,13 @@
-//! Shared helpers for `metadatas` tests.
+//! Shared helpers for integration tests.
+//!
+//! Lives at `tests/common/mod.rs` (rather than `tests/common.rs`) so Cargo
+//! does not treat it as its own integration test binary.
 
 use std::collections::BTreeMap;
 
 use git_metadata::Metadata;
-use gix::bstr::BString;
+use gix::actor::SignatureRef;
+use gix::bstr::{BStr, BString};
 use gix::objs::tree::Entry;
 pub use gix::objs::tree::EntryKind;
 use gix::refs::transaction::PreviousValue;
@@ -124,4 +128,18 @@ pub fn expected(repo: &gix::Repository, pairs: &[(gix::ObjectId, gix::ObjectId)]
 pub fn sorted(mut got: Vec<Metadata>) -> Vec<Metadata> {
     got.sort_by_key(|m| format!("{m:?}"));
     got
+}
+
+pub fn sig() -> SignatureRef<'static> {
+    SignatureRef {
+        name: BStr::new(b"Tester"),
+        email: BStr::new(b"tester@example.com"),
+        time: "1700000000 +0000",
+    }
+}
+
+/// Compute the fanout-leaf path segments for `id` at the given depth.
+pub fn leaf_path(id: gix::ObjectId, depth: u8) -> Vec<gix::bstr::BString> {
+    let hex = hex_of(id);
+    fanout_segments(&hex, depth as usize)
 }

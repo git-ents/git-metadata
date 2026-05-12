@@ -1,6 +1,6 @@
 //! Property tests.
 
-use super::helpers::*;
+use crate::common::*;
 use git_metadata::MetadataRepository;
 use proptest::prelude::*;
 

@@ -1,8 +1,9 @@
 //! Tests for `MetadataRepository::metadatas`.
 
-mod metadatas {
-    pub mod helpers;
+#[allow(dead_code)]
+mod common;
 
+mod metadatas {
     mod default_fanout;
     mod default_ref;
     mod examples;

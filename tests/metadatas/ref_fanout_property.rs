@@ -1,6 +1,6 @@
 //! Property tests for `MetadataRepository::metadata_ref_fanout`.
 
-use super::helpers::*;
+use crate::common::*;
 use git_metadata::{Error, MetadataRepository};
 use proptest::prelude::*;
 

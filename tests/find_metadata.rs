@@ -1,8 +1,9 @@
 //! Tests for `MetadataRepository::find_metadata`.
 
-mod find_metadata {
-    pub mod helpers;
+#[allow(dead_code)]
+mod common;
 
+mod find_metadata {
     mod errors;
     mod examples;
     mod property;

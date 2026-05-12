@@ -1,6 +1,6 @@
 //! Tests for `DEFAULT_FANOUT` and the absent-`.fanout`-blob fallthrough.
 
-use super::helpers::*;
+use crate::common::*;
 use git_metadata::{DEFAULT_FANOUT, MetadataRepository};
 
 #[test]

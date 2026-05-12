@@ -1,7 +1,7 @@
 //! End-to-end `.fanout` tests against `metadatas` (validation matrix lives in
 //! `ref_fanout_table` / `ref_fanout_property`).
 
-use super::helpers::*;
+use crate::common::*;
 use git_metadata::MetadataRepository;
 
 #[test]

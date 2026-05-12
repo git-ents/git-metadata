@@ -1,6 +1,6 @@
 //! Table-driven error-path tests for `MetadataRepository::metadata`.
 
-use super::helpers::*;
+use crate::common::*;
 use git_metadata::{Error, MetadataRepository};
 use rstest::rstest;
 

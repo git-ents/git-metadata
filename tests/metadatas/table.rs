@@ -6,7 +6,7 @@
 // [rstest]: https://docs.rs/rstest/latest/rstest/
 // [blog post]: https://dave.cheney.net/2019/05/07/prefer-table-driven-tests
 
-use super::helpers::*;
+use crate::common::*;
 use git_metadata::MetadataRepository;
 use rstest::rstest;
 

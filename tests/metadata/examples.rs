@@ -1,6 +1,6 @@
 //! Example-based tests for `MetadataRepository::metadata`.
 
-use super::helpers::*;
+use crate::common::*;
 use git_metadata::{DEFAULT_FANOUT, Error, MetadataRepository};
 
 #[test]
