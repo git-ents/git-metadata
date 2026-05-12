@@ -12,7 +12,7 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use git_metadata::MetadataRepository;
+use git_metadata::{Error as MetadataError, MetadataRepository};
 use gix::bstr::BString;
 use gix::objs::tree::{Entry, EntryKind};
 
@@ -112,7 +112,35 @@ impl Executor {
         oid: gix::ObjectId,
         force: bool,
     ) -> Result<gix::ObjectId> {
-        todo!()
+        if matches!(kind, EntryKind::Tree) {
+            let header = self
+                .inner
+                .try_find_header(oid)?
+                .ok_or_else(|| anyhow::anyhow!("tree object {oid} not found"))?;
+            if header.kind() != gix::object::Kind::Tree {
+                anyhow::bail!("expected tree at {oid}, found {}", header.kind());
+            }
+        }
+
+        let base_tree = self.metadata_subtree_or_empty(target)?;
+        let segments = split_path(path)?;
+        let new_tree =
+            upsert_path(&self.inner, base_tree, &segments, oid, kind, force).map_err(|e| {
+                match e {
+                    UpsertError::Exists => {
+                        anyhow::anyhow!("path {path:?} already exists")
+                    }
+                    UpsertError::NonTreeIntermediate(seg) => {
+                        anyhow::anyhow!("path segment {seg:?} is not a tree")
+                    }
+                    UpsertError::Other(e) => e,
+                }
+            })?;
+
+        let sig = self.committer()?;
+        self.inner
+            .metadata(sig, sig, Some(&self.metadatas_ref), target, &new_tree, true)
+            .map_err(Into::into)
     }
 
     /// Copy entries from `src_tree` matching any of `patterns` into
@@ -170,11 +198,34 @@ impl Executor {
     }
 
     fn committer(&self) -> Result<gix::actor::SignatureRef<'_>> {
-        todo!()
+        match self.inner.committer() {
+            Some(Ok(s)) => Ok(s),
+            Some(Err(e)) => Err(e.into()),
+            None => Err(anyhow::anyhow!("no committer identity configured")),
+        }
     }
 
     fn current_metadata_tree(&self, target: gix::ObjectId) -> Result<gix::ObjectId> {
-        todo!()
+        self.inner
+            .find_metadata(Some(self.metadatas_ref()), target)
+            .map_err(Into::into)
+    }
+
+    /// Like [`current_metadata_tree`], but returns an empty tree id when no
+    /// leaf exists yet for `target` (or the ref hasn't been created).
+    ///
+    /// [`current_metadata_tree`]: Self::current_metadata_tree
+    fn metadata_subtree_or_empty(&self, target: gix::ObjectId) -> Result<gix::ObjectId> {
+        if self.inner.try_find_reference(&self.metadatas_ref)?.is_none() {
+            return Ok(self.inner.write_object(gix::objs::Tree::empty())?.detach());
+        }
+        match self.inner.find_metadata(Some(&self.metadatas_ref), target) {
+            Ok(t) => Ok(t),
+            Err(MetadataError::NotFound(_)) => {
+                Ok(self.inner.write_object(gix::objs::Tree::empty())?.detach())
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 }
 
@@ -195,11 +246,28 @@ fn compile_patterns(patterns: &[&str]) -> Result<Vec<gix::glob::Pattern>> {
 }
 
 fn split_path(path: &str) -> Result<Vec<BString>> {
-    todo!()
+    let segs: Vec<BString> = path.split('/').map(|s| BString::from(s.as_bytes())).collect();
+    for s in &segs {
+        let bytes: &[u8] = s.as_ref();
+        if bytes.is_empty() || bytes == b"." || bytes == b".." {
+            anyhow::bail!("invalid path {path:?}");
+        }
+    }
+    Ok(segs)
 }
 
 fn decode_entries(repo: &gix::Repository, tree: gix::ObjectId) -> Result<Vec<Entry>> {
-    todo!()
+    let t = repo.find_tree(tree)?;
+    let decoded = t.decode()?;
+    Ok(decoded
+        .entries
+        .iter()
+        .map(|e| Entry {
+            mode: e.mode,
+            filename: e.filename.into(),
+            oid: e.oid.into(),
+        })
+        .collect())
 }
 
 fn upsert_path(
@@ -210,7 +278,54 @@ fn upsert_path(
     leaf_kind: EntryKind,
     force: bool,
 ) -> Result<gix::ObjectId, UpsertError> {
-    todo!()
+    let mut entries = decode_entries(repo, tree).map_err(UpsertError::Other)?;
+    let (head, rest) = path.split_first().expect("non-empty path");
+    let pos = entries.iter().position(|e| e.filename == *head);
+
+    if rest.is_empty() {
+        let mode = leaf_kind.into();
+        match pos {
+            Some(i) => {
+                if !force {
+                    return Err(UpsertError::Exists);
+                }
+                entries[i].mode = mode;
+                entries[i].oid = leaf;
+            }
+            None => entries.push(Entry {
+                mode,
+                filename: head.clone(),
+                oid: leaf,
+            }),
+        }
+    } else {
+        let tree_mode = EntryKind::Tree.into();
+        let sub = match pos {
+            Some(i) if entries[i].mode.is_tree() => entries[i].oid,
+            Some(_) => return Err(UpsertError::NonTreeIntermediate(head.clone())),
+            None => repo
+                .write_object(gix::objs::Tree::empty())
+                .map_err(|e| UpsertError::Other(e.into()))?
+                .detach(),
+        };
+        let new_sub = upsert_path(repo, sub, rest, leaf, leaf_kind, force)?;
+        match pos {
+            Some(i) => {
+                entries[i].oid = new_sub;
+                entries[i].mode = tree_mode;
+            }
+            None => entries.push(Entry {
+                mode: tree_mode,
+                filename: head.clone(),
+                oid: new_sub,
+            }),
+        }
+    }
+
+    entries.sort();
+    repo.write_object(&gix::objs::Tree { entries })
+        .map(|id| id.detach())
+        .map_err(|e| UpsertError::Other(e.into()))
 }
 
 fn remove_path(
