@@ -3,6 +3,7 @@
 mod error;
 mod metadata;
 mod repository;
+mod tree;
 
 pub use error::Error;
 pub use metadata::Metadata;
@@ -15,16 +16,87 @@ pub const DEFAULT_FANOUT: u8 = 1;
 impl MetadataRepository for gix::Repository {
     fn metadata(
         &self,
-        _author: gix::actor::SignatureRef<'_>,
-        _committer: gix::actor::SignatureRef<'_>,
-        _metadatas_ref: Option<&str>,
-        _oid: gix::ObjectId,
-        _metadata: &gix::ObjectId,
-        _force: bool,
+        author: gix::actor::SignatureRef<'_>,
+        committer: gix::actor::SignatureRef<'_>,
+        metadatas_ref: Option<&str>,
+        oid: gix::ObjectId,
+        metadata: &gix::ObjectId,
+        force: bool,
     ) -> Result<gix::ObjectId, Error> {
-        todo!()
+        let metadatas_ref = match metadatas_ref {
+            Some(r) => r,
+            None => &self.metadata_default_ref()?,
+        };
+
+        if oid.kind() != self.object_hash() {
+            return Err(Error::UnsupportedHashKind(oid, oid.kind()));
+        }
+        let metadata_header = self
+            .try_find_header(*metadata)?
+            .ok_or(Error::NotFound(*metadata))?;
+        if metadata_header.kind() != gix::object::Kind::Tree {
+            return Err(Error::InvalidType(metadata_header.kind()));
+        }
+
+        // Refs can target any object; we accept a tree-rooted ref as a
+        // bootstrap shape and migrate to commit-rooted on first write.
+        let (prior_ref_target, parents, root_tree, depth) =
+            match self.try_find_reference(metadatas_ref)? {
+                Some(mut r) => {
+                    let target = r.peel_to_id()?.detach();
+                    let header = self
+                        .try_find_header(target)?
+                        .ok_or(Error::NotFound(target))?;
+                    match header.kind() {
+                        gix::object::Kind::Commit => {
+                            let commit = self.find_commit(target)?;
+                            let tree = commit.tree_id()?.detach();
+                            let depth = self.metadata_ref_fanout(Some(metadatas_ref))?;
+                            (Some(target), vec![target], tree, depth)
+                        }
+                        gix::object::Kind::Tree => {
+                            let depth = self.metadata_ref_fanout(Some(metadatas_ref))?;
+                            (Some(target), Vec::new(), target, depth)
+                        }
+                        k => return Err(Error::InvalidRootType(k)),
+                    }
+                }
+                None => {
+                    let empty = self.write_object(gix::objs::Tree::empty())?.detach();
+                    (None, Vec::new(), empty, DEFAULT_FANOUT)
+                }
+            };
+
+        let path = tree::fanout_path(oid, depth);
+        let new_root = tree::insert_leaf(self, root_tree, &path, *metadata, force, oid)?;
+        let new_root = tree::ensure_fanout_blob(self, new_root, depth)?;
+
+        let commit = gix::objs::Commit {
+            message: "metadata: update".into(),
+            tree: new_root,
+            author: author.into(),
+            committer: committer.into(),
+            encoding: None,
+            parents: parents.into_iter().collect(),
+            extra_headers: Default::default(),
+        };
+        let commit_id = self.write_object(&commit)?.detach();
+
+        // CAS guard: require the ref to still hold the target we snapshotted,
+        // so a concurrent writer's commit isn't silently clobbered.
+        let expected = match prior_ref_target {
+            Some(prior) => gix::refs::transaction::PreviousValue::ExistingMustMatch(
+                gix::refs::Target::Object(prior),
+            ),
+            None => gix::refs::transaction::PreviousValue::MustNotExist,
+        };
+        self.reference(metadatas_ref, commit_id, expected, "metadata: update")?;
+        Ok(commit_id)
     }
 
+    /// The current implementation is infallible, but the `Result` is reserved
+    /// for future configuration-driven defaults (e.g. a repository config key)
+    /// that may surface I/O or parse errors.
     fn metadata_default_ref(&self) -> Result<String, Error> {
         Ok("refs/metadata/commits".to_string())
     }
@@ -123,9 +195,7 @@ impl MetadataRepository for gix::Repository {
             if !shape_ok || segs != prefix_segs + 1 {
                 continue;
             }
-            let id = gix::ObjectId::from_hex(&hex).map_err(|_| Error::InvalidFanoutLeaf {
-                path: entry.filepath.clone(),
-            })?;
+            let id = gix::ObjectId::from_hex(&hex).expect("shape-validated hex");
             out.push(Metadata::new(self, id, entry.oid)?);
         }
         Ok(out)

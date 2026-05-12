@@ -51,7 +51,7 @@ fn missing_ref_errors() {
     let err = repo
         .metadata_ref_fanout(Some("refs/metadatas/does-not-exist"))
         .expect_err("must error");
-    assert!(matches!(err, Error::Reference(_)), "got {err:?}");
+    assert!(matches!(err, Error::Gix(_)), "got {err:?}");
 }
 
 #[rstest]

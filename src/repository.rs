@@ -58,7 +58,7 @@ pub trait MetadataRepository {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Reference`] if the ref does not exist,
+    /// Returns [`Error::Gix`] if the ref does not exist,
     /// [`Error::InvalidFanoutType`] if the `.fanout` entry is not a blob,
     /// or [`Error::InvalidFanoutDepth`] if the blob contents are not a
     /// valid depth.
@@ -84,10 +84,10 @@ pub trait MetadataRepository {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Reference`] if the ref does not exist,
+    /// Returns [`Error::Gix`] if the ref does not exist,
     /// [`Error::InvalidFanoutDepth`] if a `.fanout` blob is present but
-    /// malformed, or any error from [`Metadata::new`] on the first invalid
-    /// leaf.
+    /// malformed, or any error from [`Metadata::new`] on the first leaf whose
+    /// referenced objects fail verification.
     ///
     /// # Examples
     ///
