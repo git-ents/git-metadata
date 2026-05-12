@@ -1,6 +1,6 @@
 //! Tree-rewriting helpers for fanout maintenance.
 
-use crate::Error;
+use crate::{DEFAULT_FANOUT, Error};
 
 /// Split the hex representation of `oid` into `depth` 2-char prefix segments
 /// followed by one leaf segment of the remaining hex characters.
@@ -19,7 +19,7 @@ pub(crate) fn fanout_path(oid: gix::ObjectId, depth: u8) -> Vec<gix::bstr::BStri
     out
 }
 
-fn decode_entries(
+pub(crate) fn decode_entries(
     repo: &gix::Repository,
     tree_oid: gix::ObjectId,
 ) -> Result<Vec<gix::objs::tree::Entry>, Error> {
@@ -89,6 +89,92 @@ pub(crate) fn insert_leaf(
 
     entries.sort();
     Ok(repo.write_object(&gix::objs::Tree { entries })?.detach())
+}
+
+/// Remove the entry at `path` under `tree_oid`, pruning intermediate trees
+/// that become empty as a result. Returns the new root tree oid. Reports
+/// [`Error::NotFound`] if the leaf is absent and [`Error::FanoutPathConflict`]
+/// if a non-tree entry occupies an intermediate path segment along the fanout.
+pub(crate) fn remove_leaf(
+    repo: &gix::Repository,
+    tree_oid: gix::ObjectId,
+    path: &[gix::bstr::BString],
+    target: gix::ObjectId,
+) -> Result<gix::ObjectId, Error> {
+    match remove_leaf_inner(repo, tree_oid, path, target)? {
+        Some(oid) => Ok(oid),
+        None => Ok(repo.write_object(gix::objs::Tree::empty())?.detach()),
+    }
+}
+
+fn remove_leaf_inner(
+    repo: &gix::Repository,
+    tree_oid: gix::ObjectId,
+    path: &[gix::bstr::BString],
+    target: gix::ObjectId,
+) -> Result<Option<gix::ObjectId>, Error> {
+    let mut entries = decode_entries(repo, tree_oid)?;
+    let (head, rest) = path.split_first().expect("non-empty path");
+
+    let pos = entries
+        .iter()
+        .position(|e| e.filename == *head)
+        .ok_or(Error::NotFound(target))?;
+
+    if rest.is_empty() {
+        entries.remove(pos);
+    } else {
+        if !entries[pos].mode.is_tree() {
+            return Err(Error::FanoutPathConflict(head.clone()));
+        }
+        match remove_leaf_inner(repo, entries[pos].oid, rest, target)? {
+            Some(new_sub) => entries[pos].oid = new_sub,
+            None => {
+                entries.remove(pos);
+            }
+        }
+    }
+
+    if entries.is_empty() {
+        return Ok(None);
+    }
+    // TODO investigate if tree construction can be less manual
+    entries.sort();
+    Ok(Some(
+        repo.write_object(&gix::objs::Tree { entries })?.detach(),
+    ))
+}
+
+/// Read the fanout depth recorded in the `.fanout` blob at the root of
+/// `tree_oid`, falling back to [`DEFAULT_FANOUT`] when absent.
+pub(crate) fn fanout_from_tree(
+    repo: &gix::Repository,
+    tree_oid: gix::ObjectId,
+) -> Result<u8, Error> {
+    let tree = repo.find_tree(tree_oid)?;
+    let hash_hex_len = tree.id.kind().len_in_hex();
+    let Some(entry) = tree.find_entry(".fanout") else {
+        return Ok(DEFAULT_FANOUT);
+    };
+    if !entry.mode().is_blob() {
+        return Err(Error::InvalidFanoutType {
+            kind: entry.mode().as_str().to_string(),
+        });
+    }
+    let blob = repo.find_blob(entry.oid())?;
+    let text =
+        std::str::from_utf8(blob.data.trim_ascii()).map_err(|_| Error::InvalidFanoutDepth {
+            value: gix::bstr::BString::from(blob.data.clone()),
+        })?;
+    let depth: u8 = text.parse().map_err(|_| Error::InvalidFanoutDepth {
+        value: gix::bstr::BString::from(text.as_bytes()),
+    })?;
+    if !(1..=19).contains(&depth) || (2 * depth as usize) >= hash_hex_len {
+        return Err(Error::InvalidFanoutDepth {
+            value: gix::bstr::BString::from(text.as_bytes()),
+        });
+    }
+    Ok(depth)
 }
 
 /// Ensure a `.fanout` blob at the root of `tree_oid` records `depth`.

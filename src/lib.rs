@@ -61,6 +61,16 @@ pub use repository::MetadataRepository;
 /// metadata tree. Matches the git-notes shape (one 2-byte directory level).
 pub const DEFAULT_FANOUT: u8 = 1;
 
+fn resolve_ref<'a>(
+    repo: &gix::Repository,
+    metadatas_ref: Option<&'a str>,
+) -> Result<std::borrow::Cow<'a, str>, Error> {
+    Ok(match metadatas_ref {
+        Some(r) => std::borrow::Cow::Borrowed(r),
+        None => std::borrow::Cow::Owned(repo.metadata_default_ref()?),
+    })
+}
+
 impl MetadataRepository for gix::Repository {
     fn metadata(
         &self,
@@ -71,10 +81,8 @@ impl MetadataRepository for gix::Repository {
         metadata: &gix::ObjectId,
         force: bool,
     ) -> Result<gix::ObjectId, Error> {
-        let metadatas_ref = match metadatas_ref {
-            Some(r) => r,
-            None => &self.metadata_default_ref()?,
-        };
+        let metadatas_ref = resolve_ref(self, metadatas_ref)?;
+        let metadatas_ref = metadatas_ref.as_ref();
 
         if oid.kind() != self.object_hash() {
             return Err(Error::UnsupportedHashKind(oid, oid.kind()));
@@ -150,52 +158,63 @@ impl MetadataRepository for gix::Repository {
     }
 
     fn metadata_ref_fanout(&self, metadatas_ref: Option<&str>) -> Result<u8, Error> {
-        let metadatas_ref = match metadatas_ref {
-            Some(r) => r,
-            None => &self.metadata_default_ref()?,
-        };
-
-        let tree = self.find_reference(metadatas_ref)?.peel_to_tree()?;
-        let hash_hex_len = tree.id.kind().len_in_hex();
-        let Some(entry) = tree.find_entry(".fanout") else {
-            return Ok(DEFAULT_FANOUT);
-        };
-        if !entry.mode().is_blob() {
-            return Err(Error::InvalidFanoutType {
-                kind: entry.mode().as_str().to_string(),
-            });
-        }
-        let blob = self.find_blob(entry.oid())?;
-        let text =
-            std::str::from_utf8(blob.data.trim_ascii()).map_err(|_| Error::InvalidFanoutDepth {
-                value: gix::bstr::BString::from(blob.data.clone()),
-            })?;
-        let depth: u8 = text.parse().map_err(|_| Error::InvalidFanoutDepth {
-            value: gix::bstr::BString::from(text.as_bytes()),
-        })?;
-        if !(1..=19).contains(&depth) || (2 * depth as usize) >= hash_hex_len {
-            return Err(Error::InvalidFanoutDepth {
-                value: gix::bstr::BString::from(text.as_bytes()),
-            });
-        }
-        Ok(depth)
+        let metadatas_ref = resolve_ref(self, metadatas_ref)?;
+        let tree = self
+            .find_reference(metadatas_ref.as_ref())?
+            .peel_to_tree()?;
+        tree::fanout_from_tree(self, tree.id)
     }
 
     fn metadata_delete(
         &self,
-        _id: gix::ObjectId,
-        _metadatas_ref: Option<&str>,
-        _author: gix::actor::SignatureRef<'_>,
-        _committer: gix::actor::SignatureRef<'_>,
+        id: gix::ObjectId,
+        metadatas_ref: Option<&str>,
+        author: gix::actor::SignatureRef<'_>,
+        committer: gix::actor::SignatureRef<'_>,
     ) -> Result<(), Error> {
-        todo!()
+        let metadatas_ref = resolve_ref(self, metadatas_ref)?;
+        let metadatas_ref = metadatas_ref.as_ref();
+
+        // Snapshot the ref once so depth and target both derive from the
+        // same tree, avoiding a torn read against a concurrent writer.
+        let target = self.find_reference(metadatas_ref)?.peel_to_id()?.detach();
+        let header = self
+            .try_find_header(target)?
+            .ok_or(Error::NotFound(target))?;
+        let (parents, root_tree) = match header.kind() {
+            gix::object::Kind::Commit => {
+                let commit = self.find_commit(target)?;
+                (vec![target], commit.tree_id()?.detach())
+            }
+            gix::object::Kind::Tree => (Vec::new(), target),
+            k => return Err(Error::InvalidRootType(k)),
+        };
+        let depth = tree::fanout_from_tree(self, root_tree)?;
+
+        let path = tree::fanout_path(id, depth);
+        let new_root = tree::remove_leaf(self, root_tree, &path, id)?;
+
+        let commit = gix::objs::Commit {
+            message: "metadata: delete".into(),
+            tree: new_root,
+            author: author.into(),
+            committer: committer.into(),
+            encoding: None,
+            parents: parents.into_iter().collect(),
+            extra_headers: Default::default(),
+        };
+        let commit_id = self.write_object(&commit)?.detach();
+
+        let expected = gix::refs::transaction::PreviousValue::ExistingMustMatch(
+            gix::refs::Target::Object(target),
+        );
+        self.reference(metadatas_ref, commit_id, expected, "metadata: delete")?;
+        Ok(())
     }
 
     fn metadatas(&self, metadatas_ref: Option<&str>) -> Result<Vec<Metadata>, Error> {
-        let metadatas_ref = match metadatas_ref {
-            Some(r) => r,
-            None => &self.metadata_default_ref()?,
-        };
+        let metadatas_ref = resolve_ref(self, metadatas_ref)?;
+        let metadatas_ref = metadatas_ref.as_ref();
 
         let depth = self.metadata_ref_fanout(Some(metadatas_ref))?;
         let tree = self.find_reference(metadatas_ref)?.peel_to_tree()?;
@@ -240,10 +259,8 @@ impl MetadataRepository for gix::Repository {
         metadatas_ref: Option<&str>,
         id: gix::ObjectId,
     ) -> Result<gix::ObjectId, Error> {
-        let metadatas_ref = match metadatas_ref {
-            Some(r) => r,
-            None => &self.metadata_default_ref()?,
-        };
+        let metadatas_ref = resolve_ref(self, metadatas_ref)?;
+        let metadatas_ref = metadatas_ref.as_ref();
 
         let depth = self.metadata_ref_fanout(Some(metadatas_ref))?;
         let path = tree::fanout_path(id, depth);
