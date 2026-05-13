@@ -3,11 +3,12 @@
 *Porcelain for adding metadata to any object without rewriting history.*
 
 > [!CAUTION]
-> This project is in active development.
-> There are surely bugs and misbehaviors that have not yet been discovered.
-> Please file a [new issue] for any misbehaviors you find!
+> This project is being refactored with breaking changes that enable more conveient library and executor interfaces, and a Rust-first backend in [Gitoxide][gitoxide].
+> The last release is fully featured: see [`v0.3.0-rc1`][v0.3.0-rc1].
+> When this refactor reaches parity with the last release, this warning will be removed.
 
-[new issue]: https://github.com/git-ents/git-metadata/issues/new
+[gitoxide]: https://github.com/GitoxideLabs/gitoxide
+[v0.3.0-rc1]: https://github.com/git-ents/git-metadata/releases/tag/git-metadata-v0.3.0-rc.1
 
 ## Overview
 
@@ -34,59 +35,9 @@ Just like notes, metadata added to an object does not alter the object's history
 Metadata entries are paths (with optional blob content) stored in a Git tree object, associated with any target object (blob, tree, or commit) via a fanout ref.
 The command follows `git notes` semantics: `list`, `show`, `add`, `remove`, `copy`, `prune`, and `get-ref`.
 
-<!-- rumdl-disable MD013 -->
-
-```shell
-# Add a path entry to HEAD's metadata tree
-git metadata add labels/bug
-git metadata add review/status -m approved
-
-# Add metadata to a specific object
-git metadata add labels/urgent abc1234
-
-# Show all metadata entries for an object
-git metadata show          # defaults to HEAD
-git metadata show abc1234
-
-# List all targets that have metadata
-git metadata list
-
-# Remove entries by glob pattern
-git metadata remove 'labels/*'
-git metadata remove 'labels/bug' -o abc1234
-
-# Keep only matching entries (remove everything else)
-git metadata remove --keep 'review/**'
-
-# Copy metadata from one object to another
-git metadata copy abc1234 def5678
-
-# Remove metadata for objects that no longer exist
-git metadata prune
-git metadata prune -n  # dry run
-
-# Print the metadata ref name
-git metadata get-ref
-
-# Create a bidirectional link between two keys
-git metadata link issue:42 commit:abc1234 --forward closes --reverse closed-by
-
-# Remove a bidirectional link
-git metadata unlink issue:42 commit:abc1234 --forward closes --reverse closed-by
-
-# List all links for a key
-git metadata linked issue:42
-
-# List links filtered by relation
-git metadata linked issue:42 --relation closes
-
-# Use a custom ref
-git metadata --ref refs/metadata/custom add labels/bug
-```
-
-<!-- rumdl-enable MD013 -->
-
-For more information, see `git metadata --help`.
+> [!NOTE]
+> Usage examples will be added when the CLI is refactored.
+> See the warning at the top of this README.
 
 ## Installation
 
