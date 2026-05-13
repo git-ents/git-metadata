@@ -50,6 +50,9 @@ mod metadata;
 mod repository;
 mod tree;
 
+#[cfg(feature = "cli")]
+pub mod exe;
+
 #[cfg(test)]
 mod tests;
 
@@ -126,7 +129,15 @@ impl MetadataRepository for gix::Repository {
             };
 
         let path = tree::fanout_path(oid, depth);
-        let new_root = tree::insert_leaf(self, root_tree, &path, *metadata, force, oid)?;
+        let new_root = tree::insert_leaf(
+            self,
+            root_tree,
+            &path,
+            *metadata,
+            gix::objs::tree::EntryKind::Tree,
+            force,
+            oid,
+        )?;
         let new_root = tree::ensure_fanout_blob(self, new_root, depth)?;
 
         let commit = gix::objs::Commit {

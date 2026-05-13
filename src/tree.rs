@@ -36,14 +36,15 @@ pub(crate) fn decode_entries(
         .collect())
 }
 
-/// Insert the tree `leaf_oid` at `path` under `tree_oid`, creating intermediate
-/// trees as needed. Returns the new root tree oid. Honors `force` at the leaf
-/// and reports collisions against `target`.
+/// Insert `leaf_oid` at `path` under `tree_oid` with mode `leaf_kind`,
+/// creating intermediate trees as needed. Returns the new root tree oid.
+/// Honors `force` at the leaf and reports collisions against `target`.
 pub(crate) fn insert_leaf(
     repo: &gix::Repository,
     tree_oid: gix::ObjectId,
     path: &[gix::bstr::BString],
     leaf_oid: gix::ObjectId,
+    leaf_kind: gix::objs::tree::EntryKind,
     force: bool,
     target: gix::ObjectId,
 ) -> Result<gix::ObjectId, Error> {
@@ -53,16 +54,17 @@ pub(crate) fn insert_leaf(
     let tree_mode = gix::objs::tree::EntryKind::Tree.into();
 
     if rest.is_empty() {
+        let leaf_mode = leaf_kind.into();
         match pos {
             Some(i) => {
                 if !force {
                     return Err(Error::AlreadyExists(target));
                 }
-                entries[i].mode = tree_mode;
+                entries[i].mode = leaf_mode;
                 entries[i].oid = leaf_oid;
             }
             None => entries.push(gix::objs::tree::Entry {
-                mode: tree_mode,
+                mode: leaf_mode,
                 filename: head.clone(),
                 oid: leaf_oid,
             }),
@@ -73,7 +75,7 @@ pub(crate) fn insert_leaf(
             Some(_) => return Err(Error::FanoutPathConflict(head.clone())),
             None => repo.write_object(gix::objs::Tree::empty())?.detach(),
         };
-        let new_sub = insert_leaf(repo, sub, rest, leaf_oid, force, target)?;
+        let new_sub = insert_leaf(repo, sub, rest, leaf_oid, leaf_kind, force, target)?;
         match pos {
             Some(i) => {
                 entries[i].oid = new_sub;

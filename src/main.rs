@@ -1,8 +1,9 @@
 mod cli;
-mod exe;
 
 use clap::Parser;
 use cli::Cli;
+#[allow(unused_imports)]
+use git_metadata::exe;
 use std::path::PathBuf;
 use std::process;
 

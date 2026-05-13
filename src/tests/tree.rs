@@ -79,6 +79,7 @@ fn insert_leaf_at_depth_one_creates_intermediate() {
         root,
         &path(&["ab", "cdef0123456789abcdef0123456789abcdef01"]),
         leaf,
+        EntryKind::Tree,
         false,
         target,
     )
@@ -103,9 +104,19 @@ fn insert_leaf_existing_without_force_errors() {
     let target = oid(b"abcdef0123456789abcdef0123456789abcdef01");
     let p = path(&["ab", "cdef0123456789abcdef0123456789abcdef01"]);
 
-    let root = insert_leaf(&repo, empty_tree(&repo), &p, leaf, false, target).expect("first");
+    let root = insert_leaf(
+        &repo,
+        empty_tree(&repo),
+        &p,
+        leaf,
+        EntryKind::Tree,
+        false,
+        target,
+    )
+    .expect("first");
     let other = repo.write_blob(b"x").expect("blob").detach();
-    let err = insert_leaf(&repo, root, &p, other, false, target).expect_err("conflict");
+    let err =
+        insert_leaf(&repo, root, &p, other, EntryKind::Tree, false, target).expect_err("conflict");
     assert!(matches!(err, Error::AlreadyExists(t) if t == target));
 }
 
@@ -126,8 +137,18 @@ fn insert_leaf_existing_with_force_replaces() {
     let target = oid(b"abcdef0123456789abcdef0123456789abcdef01");
     let p = path(&["ab", "cdef0123456789abcdef0123456789abcdef01"]);
 
-    let root = insert_leaf(&repo, empty_tree(&repo), &p, leaf_a, false, target).expect("first");
-    let new_root = insert_leaf(&repo, root, &p, leaf_b, true, target).expect("force");
+    let root = insert_leaf(
+        &repo,
+        empty_tree(&repo),
+        &p,
+        leaf_a,
+        EntryKind::Tree,
+        false,
+        target,
+    )
+    .expect("first");
+    let new_root =
+        insert_leaf(&repo, root, &p, leaf_b, EntryKind::Tree, true, target).expect("force");
 
     let root_entries = entries(&repo, new_root);
     let sub = entries(&repo, root_entries[0].oid);
@@ -155,6 +176,7 @@ fn insert_leaf_into_non_tree_segment_conflicts() {
         root,
         &path(&["ab", "cdef0123456789abcdef0123456789abcdef01"]),
         leaf,
+        EntryKind::Tree,
         false,
         target,
     )
@@ -169,7 +191,16 @@ fn remove_leaf_prunes_empty_intermediate() {
     let target = oid(b"abcdef0123456789abcdef0123456789abcdef01");
     let p = path(&["ab", "cdef0123456789abcdef0123456789abcdef01"]);
 
-    let root = insert_leaf(&repo, empty_tree(&repo), &p, leaf, false, target).expect("insert");
+    let root = insert_leaf(
+        &repo,
+        empty_tree(&repo),
+        &p,
+        leaf,
+        EntryKind::Tree,
+        false,
+        target,
+    )
+    .expect("insert");
     let new_root = remove_leaf(&repo, root, &p, target).expect("remove");
 
     assert!(entries(&repo, new_root).is_empty());
@@ -184,8 +215,17 @@ fn remove_leaf_keeps_sibling_intermediate() {
     let pa = path(&["ab", "cdef0123456789abcdef0123456789abcdef01"]);
     let pb = path(&["ab", "0000000000000000000000000000000000000f"]);
 
-    let root = insert_leaf(&repo, empty_tree(&repo), &pa, leaf, false, target_a).expect("a");
-    let root = insert_leaf(&repo, root, &pb, leaf, false, target_b).expect("b");
+    let root = insert_leaf(
+        &repo,
+        empty_tree(&repo),
+        &pa,
+        leaf,
+        EntryKind::Tree,
+        false,
+        target_a,
+    )
+    .expect("a");
+    let root = insert_leaf(&repo, root, &pb, leaf, EntryKind::Tree, false, target_b).expect("b");
     let new_root = remove_leaf(&repo, root, &pa, target_a).expect("remove");
 
     let root_entries = entries(&repo, new_root);
@@ -258,6 +298,65 @@ fn ensure_fanout_blob_replaces_existing() {
     assert_eq!(blob.data.as_slice(), b"5");
 }
 
+#[rstest]
+#[case::blob(EntryKind::Blob)]
+#[case::blob_executable(EntryKind::BlobExecutable)]
+#[case::link(EntryKind::Link)]
+#[case::commit(EntryKind::Commit)]
+fn insert_leaf_non_tree_kind(#[case] kind: EntryKind) {
+    let (_dir, repo) = repo();
+    let leaf = repo.write_blob(b"x").expect("blob").detach();
+    let target = oid(b"abcdef0123456789abcdef0123456789abcdef01");
+    let p = path(&["ab", "cdef0123456789abcdef0123456789abcdef01"]);
+
+    let new_root =
+        insert_leaf(&repo, empty_tree(&repo), &p, leaf, kind, false, target).expect("insert");
+
+    let root_entries = entries(&repo, new_root);
+    assert_eq!(root_entries.len(), 1);
+    assert!(root_entries[0].mode.is_tree(), "intermediate must be tree");
+    let sub = entries(&repo, root_entries[0].oid);
+    assert_eq!(sub.len(), 1);
+    assert_eq!(sub[0].mode, kind.into());
+    assert_eq!(sub[0].oid, leaf);
+}
+
+#[test]
+fn insert_leaf_force_changes_kind() {
+    let (_dir, repo) = repo();
+    let leaf_a = empty_tree(&repo);
+    let leaf_b = repo.write_blob(b"x").expect("blob").detach();
+    let target = oid(b"abcdef0123456789abcdef0123456789abcdef01");
+    let p = path(&["ab", "cdef0123456789abcdef0123456789abcdef01"]);
+
+    let root = insert_leaf(
+        &repo,
+        empty_tree(&repo),
+        &p,
+        leaf_a,
+        EntryKind::Tree,
+        false,
+        target,
+    )
+    .expect("first");
+    let new_root =
+        insert_leaf(&repo, root, &p, leaf_b, EntryKind::Blob, true, target).expect("force");
+
+    let sub = entries(&repo, entries(&repo, new_root)[0].oid);
+    assert_eq!(sub[0].mode, EntryKind::Blob.into());
+    assert_eq!(sub[0].oid, leaf_b);
+}
+
+fn arb_entry_kind() -> impl Strategy<Value = EntryKind> {
+    prop_oneof![
+        Just(EntryKind::Blob),
+        Just(EntryKind::BlobExecutable),
+        Just(EntryKind::Link),
+        Just(EntryKind::Commit),
+        Just(EntryKind::Tree),
+    ]
+}
+
 proptest! {
     #![proptest_config(ProptestConfig { cases: 256, ..ProptestConfig::default() })]
 
@@ -275,5 +374,33 @@ proptest! {
             prop_assert_eq!(seg.len(), 2);
         }
         prop_assert_eq!(leaf.len(), 40 - 2 * depth as usize);
+    }
+
+    /// Leaf entry mode always matches the requested kind; every intermediate
+    /// segment is always a tree regardless of kind.
+    #[test]
+    fn insert_leaf_mode_matches_kind_and_intermediates_are_trees(
+        hex in "[0-9a-f]{40}",
+        depth in 1u8..=5u8,
+        kind in arb_entry_kind(),
+    ) {
+        let (_dir, repo) = repo();
+        let target = oid(hex.as_bytes());
+        let p = fanout_path(target, depth);
+        let leaf_oid = repo.write_blob(b"x").expect("blob").detach();
+
+        let new_root =
+            insert_leaf(&repo, empty_tree(&repo), &p, leaf_oid, kind, false, target)
+                .expect("insert");
+
+        let (leaf_seg, prefix_segs) = p.split_last().expect("non-empty");
+        let mut cur = entries(&repo, new_root);
+        for seg in prefix_segs {
+            let e = cur.iter().find(|e| e.filename == *seg).expect("seg");
+            prop_assert!(e.mode.is_tree(), "intermediate {:?} must be tree", seg);
+            cur = entries(&repo, e.oid);
+        }
+        let leaf_entry = cur.iter().find(|e| e.filename == *leaf_seg).expect("leaf");
+        prop_assert_eq!(leaf_entry.mode, kind.into());
     }
 }
