@@ -38,7 +38,7 @@
 //!     email: "t@example.com".into(),
 //!     time: "0 +0000".into(),
 //! };
-//! repo.metadata(sig, sig, None, target, &metadata, false)?;
+//! repo.metadata(sig, sig, None, None, target, &metadata, false)?;
 //!
 //! let entries = repo.metadatas(None)?;
 //! assert_eq!(entries.len(), 1);
@@ -72,10 +72,12 @@ fn resolve_ref<'a>(
 }
 
 impl MetadataRepository for gix::Repository {
+    #[allow(clippy::too_many_arguments)]
     fn metadata(
         &self,
         author: gix::actor::SignatureRef<'_>,
         committer: gix::actor::SignatureRef<'_>,
+        message: Option<&str>,
         metadatas_ref: Option<&str>,
         oid: gix::ObjectId,
         metadata: &gix::ObjectId,
@@ -128,7 +130,7 @@ impl MetadataRepository for gix::Repository {
         let new_root = tree::ensure_fanout_blob(self, new_root, depth)?;
 
         let commit = gix::objs::Commit {
-            message: "metadata: update".into(),
+            message: message.unwrap_or("metadata: update").into(),
             tree: new_root,
             author: author.into(),
             committer: committer.into(),
@@ -146,7 +148,12 @@ impl MetadataRepository for gix::Repository {
             ),
             None => gix::refs::transaction::PreviousValue::MustNotExist,
         };
-        self.reference(metadatas_ref, commit_id, expected, "metadata: update")?;
+        self.reference(
+            metadatas_ref,
+            commit_id,
+            expected,
+            message.unwrap_or("metadata: update"),
+        )?;
         Ok(commit_id)
     }
 
@@ -171,6 +178,7 @@ impl MetadataRepository for gix::Repository {
         metadatas_ref: Option<&str>,
         author: gix::actor::SignatureRef<'_>,
         committer: gix::actor::SignatureRef<'_>,
+        message: Option<&str>,
     ) -> Result<(), Error> {
         let metadatas_ref = resolve_ref(self, metadatas_ref)?;
         let metadatas_ref = metadatas_ref.as_ref();
@@ -195,7 +203,7 @@ impl MetadataRepository for gix::Repository {
         let new_root = tree::remove_leaf(self, root_tree, &path, id)?;
 
         let commit = gix::objs::Commit {
-            message: "metadata: delete".into(),
+            message: message.unwrap_or("metadata: delete").into(),
             tree: new_root,
             author: author.into(),
             committer: committer.into(),
@@ -208,7 +216,12 @@ impl MetadataRepository for gix::Repository {
         let expected = gix::refs::transaction::PreviousValue::ExistingMustMatch(
             gix::refs::Target::Object(target),
         );
-        self.reference(metadatas_ref, commit_id, expected, "metadata: delete")?;
+        self.reference(
+            metadatas_ref,
+            commit_id,
+            expected,
+            message.unwrap_or("metadata: delete"),
+        )?;
         Ok(())
     }
 

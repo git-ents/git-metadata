@@ -83,7 +83,15 @@ fn rejects(
     };
 
     let err = repo
-        .metadata(sig(), sig(), Some(FANOUT_REF), target_oid, &meta_oid, false)
+        .metadata(
+            sig(),
+            sig(),
+            None,
+            Some(FANOUT_REF),
+            target_oid,
+            &meta_oid,
+            false,
+        )
         .expect_err("must error");
 
     match expect {
@@ -124,7 +132,7 @@ fn fanout_path_conflict_when_intermediate_is_not_a_tree() {
     set_ref(&repo, root);
 
     let err = repo
-        .metadata(sig(), sig(), Some(FANOUT_REF), target, &data, false)
+        .metadata(sig(), sig(), None, Some(FANOUT_REF), target, &data, false)
         .expect_err("must error");
     assert!(
         matches!(&err, Error::FanoutPathConflict(p) if p == &head),

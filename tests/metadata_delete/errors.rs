@@ -10,11 +10,11 @@ fn missing_leaf_returns_not_found() {
     let other = blob(&repo, b"other");
     let data = empty_tree(&repo);
 
-    repo.metadata(sig(), sig(), Some(FANOUT_REF), target, &data, false)
+    repo.metadata(sig(), sig(), None, Some(FANOUT_REF), target, &data, false)
         .expect("write");
 
     let err = repo
-        .metadata_delete(other, Some(FANOUT_REF), sig(), sig())
+        .metadata_delete(other, Some(FANOUT_REF), sig(), sig(), None)
         .expect_err("must error");
     assert!(
         matches!(err, Error::NotFound(o) if o == other),
@@ -28,7 +28,13 @@ fn missing_ref_errors() {
     let target = blob(&repo, b"target");
 
     let err = repo
-        .metadata_delete(target, Some("refs/metadatas/does-not-exist"), sig(), sig())
+        .metadata_delete(
+            target,
+            Some("refs/metadatas/does-not-exist"),
+            sig(),
+            sig(),
+            None,
+        )
         .expect_err("must error");
     assert!(matches!(err, Error::Gix(_)), "got {err:?}");
 }
@@ -51,7 +57,7 @@ fn intermediate_segment_is_blob_yields_conflict() {
     set_ref(&repo, root);
 
     let err = repo
-        .metadata_delete(target, Some(FANOUT_REF), sig(), sig())
+        .metadata_delete(target, Some(FANOUT_REF), sig(), sig(), None)
         .expect_err("must error");
     assert!(
         matches!(&err, Error::FanoutPathConflict(p) if p == &head),
@@ -71,7 +77,7 @@ fn invalid_fanout_type_propagates() {
     set_ref(&repo, root);
 
     let err = repo
-        .metadata_delete(target, Some(FANOUT_REF), sig(), sig())
+        .metadata_delete(target, Some(FANOUT_REF), sig(), sig(), None)
         .expect_err("must error");
     assert!(
         matches!(err, Error::InvalidFanoutType { .. }),
@@ -101,7 +107,7 @@ fn missing_leaf_at_crafted_id_returns_not_found() {
     let missing = gix::ObjectId::from_hex(&missing_hex).expect("hex");
 
     let err = repo
-        .metadata_delete(missing, Some(FANOUT_REF), sig(), sig())
+        .metadata_delete(missing, Some(FANOUT_REF), sig(), sig(), None)
         .expect_err("must error");
     assert!(
         matches!(err, Error::NotFound(o) if o == missing),
@@ -120,7 +126,7 @@ fn invalid_fanout_depth_propagates() {
     set_ref(&repo, root);
 
     let err = repo
-        .metadata_delete(target, Some(FANOUT_REF), sig(), sig())
+        .metadata_delete(target, Some(FANOUT_REF), sig(), sig(), None)
         .expect_err("must error");
     assert!(
         matches!(err, Error::InvalidFanoutDepth { .. }),

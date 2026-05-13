@@ -59,10 +59,12 @@ pub trait MetadataRepository {
     ///
     /// [`metadata_default_ref`]: MetadataRepository::metadata_default_ref
     /// [`DEFAULT_FANOUT`]: crate::DEFAULT_FANOUT
+    #[allow(clippy::too_many_arguments)]
     fn metadata(
         &self,
         author: gix::actor::SignatureRef<'_>,
         committer: gix::actor::SignatureRef<'_>,
+        message: Option<&str>,
         metadatas_ref: Option<&str>,
         oid: gix::ObjectId,
         metadata: &gix::ObjectId,
@@ -121,6 +123,7 @@ pub trait MetadataRepository {
         metadatas_ref: Option<&str>,
         author: gix::actor::SignatureRef<'_>,
         committer: gix::actor::SignatureRef<'_>,
+        message: Option<&str>,
     ) -> Result<(), Error>;
 
     /// Returns every valid [`Metadata`] entry reachable from `metadatas_ref`.

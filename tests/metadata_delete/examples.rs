@@ -9,9 +9,9 @@ fn deletes_only_leaf_and_returns_empty_listing() {
     let target = blob(&repo, b"target");
     let data = empty_tree(&repo);
 
-    repo.metadata(sig(), sig(), Some(FANOUT_REF), target, &data, false)
+    repo.metadata(sig(), sig(), None, Some(FANOUT_REF), target, &data, false)
         .expect("write");
-    repo.metadata_delete(target, Some(FANOUT_REF), sig(), sig())
+    repo.metadata_delete(target, Some(FANOUT_REF), sig(), sig(), None)
         .expect("delete");
 
     let err = repo
@@ -33,9 +33,9 @@ fn delete_advances_ref_with_prior_commit_as_parent() {
     let data = empty_tree(&repo);
 
     let c1 = repo
-        .metadata(sig(), sig(), Some(FANOUT_REF), target, &data, false)
+        .metadata(sig(), sig(), None, Some(FANOUT_REF), target, &data, false)
         .expect("write");
-    repo.metadata_delete(target, Some(FANOUT_REF), sig(), sig())
+    repo.metadata_delete(target, Some(FANOUT_REF), sig(), sig(), None)
         .expect("delete");
 
     let tip = repo
@@ -57,11 +57,11 @@ fn delete_preserves_sibling_leaves() {
     let keep = blob(&repo, b"keep");
     let drop = blob(&repo, b"drop");
 
-    repo.metadata(sig(), sig(), Some(FANOUT_REF), keep, &data, false)
+    repo.metadata(sig(), sig(), None, Some(FANOUT_REF), keep, &data, false)
         .expect("write keep");
-    repo.metadata(sig(), sig(), Some(FANOUT_REF), drop, &data, false)
+    repo.metadata(sig(), sig(), None, Some(FANOUT_REF), drop, &data, false)
         .expect("write drop");
-    repo.metadata_delete(drop, Some(FANOUT_REF), sig(), sig())
+    repo.metadata_delete(drop, Some(FANOUT_REF), sig(), sig(), None)
         .expect("delete");
 
     let got = repo.metadatas(Some(FANOUT_REF)).expect("metadatas");
@@ -74,9 +74,9 @@ fn delete_preserves_fanout_blob() {
     let target = blob(&repo, b"target");
     let data = empty_tree(&repo);
 
-    repo.metadata(sig(), sig(), Some(FANOUT_REF), target, &data, false)
+    repo.metadata(sig(), sig(), None, Some(FANOUT_REF), target, &data, false)
         .expect("write");
-    repo.metadata_delete(target, Some(FANOUT_REF), sig(), sig())
+    repo.metadata_delete(target, Some(FANOUT_REF), sig(), sig(), None)
         .expect("delete");
 
     let tree = repo
@@ -94,9 +94,9 @@ fn none_metadatas_ref_uses_default() {
     let target = blob(&repo, b"target");
     let data = empty_tree(&repo);
 
-    repo.metadata(sig(), sig(), None, target, &data, false)
+    repo.metadata(sig(), sig(), None, None, target, &data, false)
         .expect("write");
-    repo.metadata_delete(target, None, sig(), sig())
+    repo.metadata_delete(target, None, sig(), sig(), None)
         .expect("delete");
 
     let default_ref = repo.metadata_default_ref().expect("default");
@@ -124,7 +124,7 @@ fn delete_preserves_unrelated_root_entries() {
     );
     set_ref(&repo, root);
 
-    repo.metadata_delete(target, Some(FANOUT_REF), sig(), sig())
+    repo.metadata_delete(target, Some(FANOUT_REF), sig(), sig(), None)
         .expect("delete");
 
     let tree = repo
@@ -146,7 +146,7 @@ fn delete_from_tree_rooted_ref_yields_parentless_commit() {
     let root = write_fanout(&repo, None, &[(target, data)]);
     set_ref(&repo, root);
 
-    repo.metadata_delete(target, Some(FANOUT_REF), sig(), sig())
+    repo.metadata_delete(target, Some(FANOUT_REF), sig(), sig(), None)
         .expect("delete");
 
     let tip = repo

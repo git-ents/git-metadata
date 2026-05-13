@@ -18,7 +18,7 @@ fn deletes_leaf_at_configured_depth(#[case] depth: Option<u8>) {
     let root = write_fanout(&repo, depth, &[(target, data)]);
     set_ref(&repo, root);
 
-    repo.metadata_delete(target, Some(FANOUT_REF), sig(), sig())
+    repo.metadata_delete(target, Some(FANOUT_REF), sig(), sig(), None)
         .expect("delete");
 
     let got = repo.metadatas(Some(FANOUT_REF)).expect("metadatas");
@@ -41,7 +41,7 @@ fn deletes_one_among_siblings(#[case] depth: Option<u8>) {
     set_ref(&repo, root);
 
     let (drop_id, _) = leaves[2];
-    repo.metadata_delete(drop_id, Some(FANOUT_REF), sig(), sig())
+    repo.metadata_delete(drop_id, Some(FANOUT_REF), sig(), sig(), None)
         .expect("delete");
 
     let want: Vec<_> = leaves

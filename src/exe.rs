@@ -105,6 +105,11 @@ impl Executor {
     /// When `force` is false and an entry already exists at `path`, returns
     /// an error. Successive calls at different paths compose. Returns the
     /// commit id at the new tip of the metadata ref.
+    ///
+    /// `message` overrides the default commit message; `author` overrides
+    /// the configured identity for the commit's author (committer is always
+    /// taken from config).
+    #[allow(clippy::too_many_arguments)]
     pub fn upsert(
         &self,
         target: gix::ObjectId,
@@ -112,6 +117,8 @@ impl Executor {
         kind: EntryKind,
         oid: gix::ObjectId,
         force: bool,
+        message: Option<&str>,
+        author: Option<gix::actor::SignatureRef<'_>>,
     ) -> Result<gix::ObjectId> {
         todo!()
     }
@@ -125,6 +132,8 @@ impl Executor {
     /// `<dest_prefix>/<orig_path>`. Entry modes are preserved verbatim.
     /// All matching entries are folded into one commit on the metadata ref.
     /// `force` controls overwriting existing entries at the destination.
+    /// See [`upsert`](Self::upsert) for `message` and `author` semantics.
+    #[allow(clippy::too_many_arguments)]
     pub fn import(
         &self,
         target: gix::ObjectId,
@@ -132,6 +141,8 @@ impl Executor {
         patterns: &[&str],
         dest_prefix: Option<&str>,
         force: bool,
+        message: Option<&str>,
+        author: Option<gix::actor::SignatureRef<'_>>,
     ) -> Result<gix::ObjectId> {
         todo!()
     }
@@ -143,13 +154,24 @@ impl Executor {
     /// match are retained, everything else is removed). When the metadata
     /// tree is left empty the fanout leaf is deleted entirely and `None` is
     /// returned; otherwise returns the commit id at the new tip of the
-    /// metadata ref.
+    /// metadata ref. See [`upsert`](Self::upsert) for `message` and
+    /// `author` semantics.
     pub fn remove(
         &self,
         target: gix::ObjectId,
         patterns: &[&str],
         keep: bool,
+        message: Option<&str>,
+        author: Option<gix::actor::SignatureRef<'_>>,
     ) -> Result<Option<gix::ObjectId>> {
+        todo!()
+    }
+
+    /// List targets whose oid no longer exists in the object database.
+    ///
+    /// Read-only counterpart to [`prune`](Self::prune): returns the same set
+    /// of targets `prune` would drop, without modifying the metadata ref.
+    pub fn stale(&self) -> Result<Vec<gix::ObjectId>> {
         todo!()
     }
 
@@ -172,6 +194,11 @@ impl Executor {
     /// `dry_run`). Prints one target oid per line to `out`.
     pub fn prune(&self, dry_run: bool, out: &mut dyn Write) -> Result<usize> {
         todo!()
+    }
+
+    /// The underlying `gix` repository handle.
+    pub fn repo(&self) -> &gix::Repository {
+        &self.inner
     }
 
     fn committer(&self) -> Result<gix::actor::SignatureRef<'_>> {

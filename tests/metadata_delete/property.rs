@@ -22,7 +22,7 @@ fn write_unique(repo: &gix::Repository, depth: Option<u8>, n: usize) -> Vec<gix:
         if !seen.insert(id) {
             continue;
         }
-        repo.metadata(sig(), sig(), Some(FANOUT_REF), id, &data, false)
+        repo.metadata(sig(), sig(), None, Some(FANOUT_REF), id, &data, false)
             .expect("write");
         written.push(id);
     }
@@ -42,7 +42,7 @@ proptest! {
         let written = write_unique(&repo, depth, n);
 
         for id in &written {
-            repo.metadata_delete(*id, Some(FANOUT_REF), sig(), sig())
+            repo.metadata_delete(*id, Some(FANOUT_REF), sig(), sig(), None)
                 .expect("delete");
         }
 
@@ -61,7 +61,7 @@ proptest! {
 
         let (drop, keep) = written.split_at(written.len() / 2);
         for id in drop {
-            repo.metadata_delete(*id, Some(FANOUT_REF), sig(), sig())
+            repo.metadata_delete(*id, Some(FANOUT_REF), sig(), sig(), None)
                 .expect("delete");
         }
 
@@ -85,9 +85,9 @@ proptest! {
         let written = write_unique(&repo, depth, n);
 
         for id in &written {
-            repo.metadata_delete(*id, Some(FANOUT_REF), sig(), sig())
+            repo.metadata_delete(*id, Some(FANOUT_REF), sig(), sig(), None)
                 .expect("delete");
-            repo.metadata(sig(), sig(), Some(FANOUT_REF), *id, &data, false)
+            repo.metadata(sig(), sig(), None, Some(FANOUT_REF), *id, &data, false)
                 .expect("re-write");
             let got = repo.find_metadata(Some(FANOUT_REF), *id).expect("find");
             prop_assert_eq!(got, data);

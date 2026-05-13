@@ -9,7 +9,7 @@ fn returns_data_oid_after_write() {
     let target = blob(&repo, b"target");
     let data = empty_tree(&repo);
 
-    repo.metadata(sig(), sig(), Some(FANOUT_REF), target, &data, false)
+    repo.metadata(sig(), sig(), None, Some(FANOUT_REF), target, &data, false)
         .expect("write");
 
     let got = repo.find_metadata(Some(FANOUT_REF), target).expect("find");
@@ -22,7 +22,7 @@ fn none_metadatas_ref_uses_default() {
     let target = blob(&repo, b"target");
     let data = empty_tree(&repo);
 
-    repo.metadata(sig(), sig(), None, target, &data, false)
+    repo.metadata(sig(), sig(), None, None, target, &data, false)
         .expect("write");
 
     let got = repo.find_metadata(None, target).expect("find");
@@ -36,7 +36,7 @@ fn missing_leaf_returns_not_found() {
     let other = blob(&repo, b"other");
     let data = empty_tree(&repo);
 
-    repo.metadata(sig(), sig(), Some(FANOUT_REF), target, &data, false)
+    repo.metadata(sig(), sig(), None, Some(FANOUT_REF), target, &data, false)
         .expect("write");
 
     let err = repo

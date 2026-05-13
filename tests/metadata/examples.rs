@@ -10,7 +10,7 @@ fn missing_ref_creates_new_commit_with_default_fanout() {
     let data = empty_tree(&repo);
 
     let commit_id = repo
-        .metadata(sig(), sig(), Some(FANOUT_REF), target, &data, false)
+        .metadata(sig(), sig(), None, Some(FANOUT_REF), target, &data, false)
         .expect("write metadata");
 
     // Ref now points to the new commit.
@@ -35,7 +35,7 @@ fn fanout_blob_is_written_even_when_initial_state_is_empty_tree_ref() {
     let empty = empty_tree(&repo);
     set_ref(&repo, empty);
 
-    repo.metadata(sig(), sig(), Some(FANOUT_REF), target, &data, false)
+    repo.metadata(sig(), sig(), None, Some(FANOUT_REF), target, &data, false)
         .expect("write metadata");
 
     // Commit's tree must now contain a `.fanout` blob.
@@ -56,10 +56,10 @@ fn second_write_uses_first_commit_as_parent() {
     let t2 = blob(&repo, b"t2");
 
     let c1 = repo
-        .metadata(sig(), sig(), Some(FANOUT_REF), t1, &data, false)
+        .metadata(sig(), sig(), None, Some(FANOUT_REF), t1, &data, false)
         .expect("first");
     let c2 = repo
-        .metadata(sig(), sig(), Some(FANOUT_REF), t2, &data, false)
+        .metadata(sig(), sig(), None, Some(FANOUT_REF), t2, &data, false)
         .expect("second");
 
     assert_ne!(c1, c2);
@@ -82,7 +82,7 @@ fn existing_tree_ref_yields_parentless_commit() {
     set_ref(&repo, root);
 
     let c = repo
-        .metadata(sig(), sig(), Some(FANOUT_REF), target, &data, false)
+        .metadata(sig(), sig(), None, Some(FANOUT_REF), target, &data, false)
         .expect("write metadata");
     let commit = repo.find_commit(c).expect("find commit");
     assert_eq!(commit.parent_ids().count(), 0);
@@ -94,10 +94,10 @@ fn existing_leaf_without_force_errors_already_exists() {
     let data = empty_tree(&repo);
     let target = blob(&repo, b"target");
 
-    repo.metadata(sig(), sig(), Some(FANOUT_REF), target, &data, false)
+    repo.metadata(sig(), sig(), None, Some(FANOUT_REF), target, &data, false)
         .expect("first");
     let err = repo
-        .metadata(sig(), sig(), Some(FANOUT_REF), target, &data, false)
+        .metadata(sig(), sig(), None, Some(FANOUT_REF), target, &data, false)
         .expect_err("duplicate must error");
     assert!(
         matches!(err, Error::AlreadyExists(o) if o == target),
@@ -113,9 +113,9 @@ fn existing_leaf_with_force_overwrites() {
     let inner = blob(&repo, b"inner");
     let data2 = write_tree(&repo, vec![(vec!["f".into()], EntryKind::Blob, inner)]);
 
-    repo.metadata(sig(), sig(), Some(FANOUT_REF), target, &data1, false)
+    repo.metadata(sig(), sig(), None, Some(FANOUT_REF), target, &data1, false)
         .expect("first");
-    repo.metadata(sig(), sig(), Some(FANOUT_REF), target, &data2, true)
+    repo.metadata(sig(), sig(), None, Some(FANOUT_REF), target, &data2, true)
         .expect("force overwrite");
 
     let got = repo.metadatas(Some(FANOUT_REF)).expect("metadatas");
@@ -129,7 +129,7 @@ fn none_metadatas_ref_uses_default() {
     let data = empty_tree(&repo);
     let default_ref = repo.metadata_default_ref().expect("default");
 
-    repo.metadata(sig(), sig(), None, target, &data, false)
+    repo.metadata(sig(), sig(), None, None, target, &data, false)
         .expect("write");
     let got = repo.metadatas(Some(&default_ref)).expect("metadatas");
     assert_eq!(sorted(got), expected(&repo, &[(target, data)]));
@@ -142,9 +142,9 @@ fn preserves_existing_leaves_at_other_paths() {
     let t1 = blob(&repo, b"alpha");
     let t2 = blob(&repo, b"beta");
 
-    repo.metadata(sig(), sig(), Some(FANOUT_REF), t1, &data, false)
+    repo.metadata(sig(), sig(), None, Some(FANOUT_REF), t1, &data, false)
         .expect("first");
-    repo.metadata(sig(), sig(), Some(FANOUT_REF), t2, &data, false)
+    repo.metadata(sig(), sig(), None, Some(FANOUT_REF), t2, &data, false)
         .expect("second");
 
     let got = repo.metadatas(Some(FANOUT_REF)).expect("metadatas");
