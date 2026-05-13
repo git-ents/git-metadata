@@ -1,12 +1,12 @@
 //! CLI runtime layer: a thin, side-effecting wrapper around the
 //! [`MetadataRepository`] trait suitable for driving from `main`.
 //!
-//! Each [`Repo`] method maps one-to-one onto a CLI subcommand. Output is
+//! Each [`Executor`] method maps one-to-one onto a CLI subcommand. Output is
 //! written to a caller-supplied [`Write`] so the harness can capture it for
 //! tests; errors bubble up as [`anyhow::Error`] so the CLI can render them
 //! uniformly.
 
-#![allow(dead_code)]
+#![allow(dead_code, unused_variables)]
 
 use std::io::Write;
 use std::path::Path;
@@ -102,8 +102,9 @@ impl Executor {
     /// - [`EntryKind::Tree`]: the oid is verified to exist and decode as a
     ///   tree, because a bogus tree oid would silently corrupt the parent.
     ///
-    /// Successive calls at different paths compose. Returns the commit id
-    /// at the new tip of the metadata ref.
+    /// When `force` is false and an entry already exists at `path`, returns
+    /// an error. Successive calls at different paths compose. Returns the
+    /// commit id at the new tip of the metadata ref.
     pub fn upsert(
         &self,
         target: gix::ObjectId,
@@ -112,35 +113,7 @@ impl Executor {
         oid: gix::ObjectId,
         force: bool,
     ) -> Result<gix::ObjectId> {
-        if matches!(kind, EntryKind::Tree) {
-            let header = self
-                .inner
-                .try_find_header(oid)?
-                .ok_or_else(|| anyhow::anyhow!("tree object {oid} not found"))?;
-            if header.kind() != gix::object::Kind::Tree {
-                anyhow::bail!("expected tree at {oid}, found {}", header.kind());
-            }
-        }
-
-        let base_tree = self.metadata_subtree_or_empty(target)?;
-        let segments = split_path(path)?;
-        let new_tree =
-            upsert_path(&self.inner, base_tree, &segments, oid, kind, force).map_err(|e| {
-                match e {
-                    UpsertError::Exists => {
-                        anyhow::anyhow!("path {path:?} already exists")
-                    }
-                    UpsertError::NonTreeIntermediate(seg) => {
-                        anyhow::anyhow!("path segment {seg:?} is not a tree")
-                    }
-                    UpsertError::Other(e) => e,
-                }
-            })?;
-
-        let sig = self.committer()?;
-        self.inner
-            .metadata(sig, sig, Some(&self.metadatas_ref), target, &new_tree, true)
-            .map_err(Into::into)
+        todo!()
     }
 
     /// Copy entries from `src_tree` matching any of `patterns` into
@@ -168,13 +141,22 @@ impl Executor {
     /// With `keep = false`, entries whose path matches any pattern are
     /// removed; with `keep = true`, the predicate is inverted (entries that
     /// match are retained, everything else is removed). When the metadata
-    /// tree is left empty, the fanout leaf is deleted entirely.
-    pub fn remove(&self, target: gix::ObjectId, patterns: &[&str], keep: bool) -> Result<()> {
+    /// tree is left empty the fanout leaf is deleted entirely and `None` is
+    /// returned; otherwise returns the commit id at the new tip of the
+    /// metadata ref.
+    pub fn remove(
+        &self,
+        target: gix::ObjectId,
+        patterns: &[&str],
+        keep: bool,
+    ) -> Result<Option<gix::ObjectId>> {
         todo!()
     }
 
-    /// Copy `from`'s metadata tree to `to`. Returns the commit id at the new
-    /// tip of the metadata ref.
+    /// Copy `from`'s metadata tree to `to`.
+    ///
+    /// `force` controls whether existing entries at the destination are
+    /// overwritten. Returns the commit id at the new tip of the metadata ref.
     pub fn copy(
         &self,
         from: gix::ObjectId,
@@ -189,11 +171,6 @@ impl Executor {
     /// Returns the number of entries pruned (or that would be pruned, if
     /// `dry_run`). Prints one target oid per line to `out`.
     pub fn prune(&self, dry_run: bool, out: &mut dyn Write) -> Result<usize> {
-        todo!()
-    }
-
-    /// Print the configured metadata ref to `out` (the `get-ref` subcommand).
-    pub fn get_ref(&self, out: &mut dyn Write) -> Result<()> {
         todo!()
     }
 
@@ -216,7 +193,11 @@ impl Executor {
     ///
     /// [`current_metadata_tree`]: Self::current_metadata_tree
     fn metadata_subtree_or_empty(&self, target: gix::ObjectId) -> Result<gix::ObjectId> {
-        if self.inner.try_find_reference(&self.metadatas_ref)?.is_none() {
+        if self
+            .inner
+            .try_find_reference(&self.metadatas_ref)?
+            .is_none()
+        {
             return Ok(self.inner.write_object(gix::objs::Tree::empty())?.detach());
         }
         match self.inner.find_metadata(Some(&self.metadatas_ref), target) {
@@ -246,7 +227,10 @@ fn compile_patterns(patterns: &[&str]) -> Result<Vec<gix::glob::Pattern>> {
 }
 
 fn split_path(path: &str) -> Result<Vec<BString>> {
-    let segs: Vec<BString> = path.split('/').map(|s| BString::from(s.as_bytes())).collect();
+    let segs: Vec<BString> = path
+        .split('/')
+        .map(|s| BString::from(s.as_bytes()))
+        .collect();
     for s in &segs {
         let bytes: &[u8] = s.as_ref();
         if bytes.is_empty() || bytes == b"." || bytes == b".." {
