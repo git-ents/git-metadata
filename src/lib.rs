@@ -1,1105 +1,310 @@
-use git_filter_tree::FilterTree as _;
-use git2::{Error, ErrorCode, Oid, Repository};
-
-/// Options that control mutating metadata operations.
-#[derive(Debug, Clone)]
-pub struct MetadataOptions {
-    /// Fanout depth (number of 2-hex-char directory segments).
-    /// 1 means `ab/cdef01...` (like git-notes), 2 means `ab/cd/ef01...`.
-    pub shard_level: u8,
-    /// Overwrite an existing entry without error.
-    pub force: bool,
-}
-
-impl Default for MetadataOptions {
-    fn default() -> Self {
-        Self {
-            shard_level: 1,
-            force: false,
-        }
-    }
-}
-
-/// A single entry in a metadata tree: a path and optional blob content.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MetadataEntry {
-    /// Path relative to the metadata tree root (e.g. `labels/bug`).
-    pub path: String,
-    /// Blob content, if the entry is a blob. `None` for tree-only entries.
-    pub content: Option<Vec<u8>>,
-    /// The OID of the entry (blob or tree).
-    pub oid: Oid,
-    /// Whether this entry is a tree (directory) rather than a blob.
-    pub is_tree: bool,
-}
-
-/// A metadata index maps [`Oid`] → [`git2::Tree`], stored as a fanout tree
-/// under a Git reference (e.g. `refs/metadata/commits`).
-///
-/// This is analogous to Git notes, which map Oid → Blob, but metadata
-/// entries are trees containing arbitrary paths.
-pub trait MetadataIndex {
-    /// List all targets that have metadata entries.
-    /// Returns `(target_oid, tree_oid)` pairs.
-    fn metadata_list(&self, ref_name: &str) -> Result<Vec<(Oid, Oid)>, Error>;
-
-    /// Get the raw metadata tree OID for a target.
-    /// Returns `None` if no entry exists.
-    fn metadata_get(&self, ref_name: &str, target: &Oid) -> Result<Option<Oid>, Error>;
-
-    /// Set the raw metadata tree OID for a target.
-    ///
-    /// Builds the fanout index tree and returns the new root tree OID.
-    /// Does **not** commit; call [`Self::metadata_commit`] to persist.
-    fn metadata(
-        &self,
-        ref_name: &str,
-        target: &Oid,
-        tree: &Oid,
-        opts: &MetadataOptions,
-    ) -> Result<Oid, Error>;
-
-    /// Commit a new root tree OID to `ref_name` with the given message.
-    ///
-    /// Returns the new commit OID.
-    fn metadata_commit(&self, ref_name: &str, root: Oid, message: &str) -> Result<Oid, Error>;
-
-    /// Set the raw metadata tree OID for a target.
-    /// Returns the new root tree OID committed under `ref_name`.
-    ///
-    /// # Deprecated
-    ///
-    /// Use [`Self::metadata`] followed by [`Self::metadata_commit`] instead.
-    #[deprecated(since = "0.1.0", note = "use `metadata` + `metadata_commit` instead")]
-    fn metadata_set(
-        &self,
-        ref_name: &str,
-        target: &Oid,
-        tree: &Oid,
-        opts: &MetadataOptions,
-    ) -> Result<Oid, Error> {
-        #[allow(deprecated)]
-        let new_root = self.metadata(ref_name, target, tree, opts)?;
-        let msg = format!("metadata: set {} -> {}", target, tree);
-        self.metadata_commit(ref_name, new_root, &msg)?;
-        Ok(new_root)
-    }
-
-    /// Show all entries in the metadata tree for a target.
-    /// Returns leaf blob entries with their paths and content.
-    fn metadata_show(&self, ref_name: &str, target: &Oid) -> Result<Vec<MetadataEntry>, Error>;
-
-    /// Add a path entry (with optional blob content) to a target's metadata tree.
-    ///
-    /// If `content` is `Some`, a blob is created at `path`.
-    /// If `content` is `None`, an empty blob is created as a marker.
-    /// If the target has no metadata yet, a new tree is created.
-    /// Errors if the path already exists unless `opts.force` is true.
-    fn metadata_add(
-        &self,
-        ref_name: &str,
-        target: &Oid,
-        path: &str,
-        content: Option<&[u8]>,
-        opts: &MetadataOptions,
-    ) -> Result<Oid, Error>;
-
-    /// Remove path entries matching `patterns` from a target's metadata tree.
-    ///
-    /// When `keep` is false, entries matching any pattern are removed.
-    /// When `keep` is true, only entries matching a pattern are kept.
-    /// Returns `Ok(true)` if anything was removed, `Ok(false)` otherwise.
-    fn metadata_remove_paths(
-        &self,
-        ref_name: &str,
-        target: &Oid,
-        patterns: &[&str],
-        keep: bool,
-    ) -> Result<bool, Error>;
-
-    /// Remove the entire metadata entry for a target.
-    /// Returns `Ok(true)` if removed, `Ok(false)` if no entry existed.
-    fn metadata_remove(&self, ref_name: &str, target: &Oid) -> Result<bool, Error>;
-
-    /// Copy the metadata tree from one target to another.
-    /// Errors if `to` already has metadata unless `force` is true.
-    /// Errors if `from` has no metadata.
-    fn metadata_copy(
-        &self,
-        ref_name: &str,
-        from: &Oid,
-        to: &Oid,
-        opts: &MetadataOptions,
-    ) -> Result<Oid, Error>;
-
-    /// Remove metadata entries for targets that no longer exist in the object database.
-    /// Returns the list of pruned target OIDs.
-    fn metadata_prune(&self, ref_name: &str, dry_run: bool) -> Result<Vec<Oid>, Error>;
-
-    /// Return the resolved ref name (identity for now, but allows future indirection).
-    fn metadata_get_ref(&self, ref_name: &str) -> String;
-
-    /// Create a bidirectional link between two keys.
-    ///
-    /// Writes `<a>/<forward>/<b>` and `<b>/<reverse>/<a>` in one commit.
-    /// `meta` is optional blob content stored at each link entry.
-    fn link(
-        &self,
-        ref_name: &str,
-        a: &str,
-        b: &str,
-        forward: &str,
-        reverse: &str,
-        meta: Option<&[u8]>,
-    ) -> Result<Oid, Error>;
-
-    /// Remove a bidirectional link between two keys.
-    ///
-    /// Removes `<a>/<forward>/<b>` and `<b>/<reverse>/<a>` in one commit.
-    fn unlink(
-        &self,
-        ref_name: &str,
-        a: &str,
-        b: &str,
-        forward: &str,
-        reverse: &str,
-    ) -> Result<Oid, Error>;
-
-    /// List all links for a key, optionally filtered by relation name.
-    ///
-    /// Returns `(relation, target)` pairs.
-    fn linked(
-        &self,
-        ref_name: &str,
-        key: &str,
-        relation: Option<&str>,
-    ) -> Result<Vec<(String, String)>, Error>;
-
-    /// Check whether a specific link exists.
-    fn is_linked(&self, ref_name: &str, a: &str, b: &str, forward: &str) -> Result<bool, Error>;
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Maximum allowed shard level. A SHA-1 hex string is 40 chars; each level
-/// consumes 2 chars, so the leaf must keep at least 2 chars.
-const MAX_SHARD_LEVEL: u8 = 19;
-
-/// Split a hex OID string into `(prefix_segments, leaf)` according to `shard_level`.
-///
-/// Returns an error if `shard_level` exceeds [`MAX_SHARD_LEVEL`].
-fn shard_oid(oid: &Oid, shard_level: u8) -> Result<(Vec<String>, String), Error> {
-    if shard_level > MAX_SHARD_LEVEL {
-        return Err(Error::from_str(&format!(
-            "shard_level {} exceeds maximum of {}",
-            shard_level, MAX_SHARD_LEVEL
-        )));
-    }
-    let hex = oid.to_string();
-    let mut segments = Vec::with_capacity(shard_level as usize);
-    let mut pos = 0;
-    for _ in 0..shard_level {
-        segments.push(hex[pos..pos + 2].to_string());
-        pos += 2;
-    }
-    let leaf = hex[pos..].to_string();
-    Ok((segments, leaf))
-}
-
-/// Resolve an existing root tree from a reference, if it exists.
-fn resolve_root_tree<'r>(
-    repo: &'r Repository,
-    ref_name: &str,
-) -> Result<Option<git2::Tree<'r>>, Error> {
-    match repo.find_reference(ref_name) {
-        Ok(reference) => {
-            let commit = reference.peel_to_commit()?;
-            let tree = commit.tree()?;
-            Ok(Some(tree))
-        }
-        Err(e) if e.code() == ErrorCode::NotFound => Ok(None),
-        Err(e) => Err(e),
-    }
-}
-
-/// Walk into a tree following `segments`, returning the final sub-tree.
-fn walk_tree<'a>(
-    repo: &'a Repository,
-    root: &git2::Tree<'a>,
-    segments: &[String],
-) -> Result<Option<git2::Tree<'a>>, Error> {
-    let mut current = root.clone();
-    for seg in segments {
-        let id = match current.get_name(seg) {
-            Some(entry) => entry.id(),
-            None => return Ok(None),
-        };
-        current = repo.find_tree(id)?;
-    }
-    Ok(Some(current))
-}
-
-/// Returns `true` if `name` is a 2-char hex string (fanout directory name).
-fn is_fanout_segment(name: &str) -> bool {
-    name.len() == 2 && name.bytes().all(|b| b.is_ascii_hexdigit())
-}
-
-/// Recursively collect all `(target_oid, tree_oid)` entries from a fanout tree.
-fn collect_entries(
-    repo: &Repository,
-    tree: &git2::Tree<'_>,
-    prefix: &str,
-) -> Result<Vec<(Oid, Oid)>, Error> {
-    let mut results = Vec::new();
-    for entry in tree.iter() {
-        let name = entry.name().unwrap_or("");
-        if entry.kind() != Some(git2::ObjectType::Tree) {
-            continue;
-        }
-        let full = format!("{prefix}{name}");
-        if is_fanout_segment(name) {
-            let subtree = repo.find_tree(entry.id())?;
-            results.extend(collect_entries(repo, &subtree, &full)?);
-        } else if let Ok(oid) = Oid::from_str(&full)
-            && oid.to_string() == full
-        {
-            results.push((oid, entry.id()));
-        }
-    }
-    Ok(results)
-}
-
-/// Detect the fanout path for `target` in `root` by probing all possible depths.
-fn detect_fanout(
-    repo: &Repository,
-    root: &git2::Tree<'_>,
-    target: &Oid,
-) -> Result<Option<(Vec<String>, String, Oid)>, Error> {
-    let hex = target.to_string();
-    let max_depth = hex.len() / 2;
-    for depth in 0..max_depth {
-        let prefix_len = depth * 2;
-        let segments: Vec<String> = (0..depth)
-            .map(|i| hex[i * 2..i * 2 + 2].to_string())
-            .collect();
-        let leaf = &hex[prefix_len..];
-
-        if let Some(subtree) = walk_tree(repo, root, &segments)?
-            && let Some(entry) = subtree.get_name(leaf)
-            && entry.kind() == Some(git2::ObjectType::Tree)
-        {
-            return Ok(Some((segments, leaf.to_string(), entry.id())));
-        }
-    }
-    Ok(None)
-}
-
-/// Build the nested fanout tree for an upsert, returning the new root tree OID.
-fn build_fanout(
-    repo: &Repository,
-    existing_root: Option<&git2::Tree<'_>>,
-    segments: &[String],
-    leaf: &str,
-    value_tree_oid: &Oid,
-) -> Result<Oid, Error> {
-    let mut existing_subtrees: Vec<Option<git2::Tree<'_>>> = Vec::new();
-    if let Some(root) = existing_root {
-        let mut current = Some(root.clone());
-        existing_subtrees.push(current.clone());
-        for seg in segments {
-            current = match &current {
-                Some(t) => match t.get_name(seg) {
-                    Some(e) => Some(repo.find_tree(e.id())?),
-                    None => None,
-                },
-                None => None,
-            };
-            existing_subtrees.push(current.clone());
-        }
-    } else {
-        for _ in 0..=segments.len() {
-            existing_subtrees.push(None);
-        }
-    }
-
-    let deepest_existing = existing_subtrees.last().and_then(|o| o.as_ref());
-    let mut builder = repo.treebuilder(deepest_existing)?;
-    builder.insert(leaf, *value_tree_oid, 0o040000)?;
-    let mut child_oid = builder.write()?;
-
-    for (i, seg) in segments.iter().enumerate().rev() {
-        let parent_existing = existing_subtrees[i].as_ref();
-        let mut builder = repo.treebuilder(parent_existing)?;
-        builder.insert(seg, child_oid, 0o040000)?;
-        child_oid = builder.write()?;
-    }
-
-    Ok(child_oid)
-}
-
-/// Result of a fanout removal operation.
-enum RemoveResult {
-    NotFound,
-    Empty,
-    Removed(Oid),
-}
-
-/// Build the nested fanout tree for a removal, returning the new root tree OID.
-fn build_fanout_remove(
-    repo: &Repository,
-    root: &git2::Tree<'_>,
-    segments: &[String],
-    leaf: &str,
-) -> Result<RemoveResult, Error> {
-    let mut chain_oids: Vec<Oid> = vec![root.id()];
-    {
-        let mut current = root.clone();
-        for seg in segments {
-            let id = match current.get_name(seg) {
-                Some(e) => e.id(),
-                None => return Ok(RemoveResult::NotFound),
-            };
-            chain_oids.push(id);
-            current = repo.find_tree(id)?;
-        }
-    }
-
-    let deepest = repo.find_tree(*chain_oids.last().unwrap())?;
-    let mut builder = repo.treebuilder(Some(&deepest))?;
-    if builder.get(leaf)?.is_none() {
-        return Ok(RemoveResult::NotFound);
-    }
-    builder.remove(leaf)?;
-
-    let mut child_oid = if builder.is_empty() {
-        None
-    } else {
-        Some(builder.write()?)
-    };
-
-    for (i, seg) in segments.iter().enumerate().rev() {
-        let parent = repo.find_tree(chain_oids[i])?;
-        let mut builder = repo.treebuilder(Some(&parent))?;
-        match child_oid {
-            Some(oid) => {
-                builder.insert(seg, oid, 0o040000)?;
-            }
-            None => {
-                builder.remove(seg)?;
-            }
-        }
-        child_oid = if builder.is_empty() {
-            None
-        } else {
-            Some(builder.write()?)
-        };
-    }
-
-    match child_oid {
-        Some(oid) => Ok(RemoveResult::Removed(oid)),
-        None => Ok(RemoveResult::Empty),
-    }
-}
-
-/// Commit a new root tree under `ref_name`, parenting on the existing commit.
-fn commit_index(
-    repo: &Repository,
-    ref_name: &str,
-    tree_oid: Oid,
-    message: &str,
-) -> Result<Oid, Error> {
-    let tree = repo.find_tree(tree_oid)?;
-    let sig = repo.signature()?;
-
-    let parent = match repo.find_reference(ref_name) {
-        Ok(r) => Some(r.peel_to_commit()?),
-        Err(e) if e.code() == ErrorCode::NotFound => None,
-        Err(e) => return Err(e),
-    };
-
-    let parents: Vec<&git2::Commit<'_>> = parent.iter().collect();
-    let commit_oid = repo.commit(Some(ref_name), &sig, &sig, message, &tree, &parents)?;
-    Ok(commit_oid)
-}
-
-/// Recursively collect leaf entries from a metadata tree.
-fn collect_tree_entries(
-    repo: &Repository,
-    tree: &git2::Tree<'_>,
-    prefix: &str,
-) -> Result<Vec<MetadataEntry>, Error> {
-    let mut results = Vec::new();
-    for entry in tree.iter() {
-        let name = entry.name().unwrap_or("");
-        let path = if prefix.is_empty() {
-            name.to_string()
-        } else {
-            format!("{prefix}/{name}")
-        };
-        match entry.kind() {
-            Some(git2::ObjectType::Tree) => {
-                let subtree = repo.find_tree(entry.id())?;
-                results.extend(collect_tree_entries(repo, &subtree, &path)?);
-            }
-            Some(git2::ObjectType::Blob) => {
-                let blob = repo.find_blob(entry.id())?;
-                results.push(MetadataEntry {
-                    path,
-                    content: Some(blob.content().to_vec()),
-                    oid: entry.id(),
-                    is_tree: false,
-                });
-            }
-            _ => {}
-        }
-    }
-    Ok(results)
-}
-
-/// Insert a blob at `path` within an existing tree (or create a new tree).
-/// Path components are split on `/`. Returns the new tree OID.
-fn insert_path_into_tree(
-    repo: &Repository,
-    existing: Option<&git2::Tree<'_>>,
-    path: &str,
-    blob_oid: Oid,
-) -> Result<Oid, Error> {
-    let components: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-    if components.is_empty() {
-        return Err(Error::from_str("empty path"));
-    }
-    insert_path_recursive(repo, existing, &components, blob_oid)
-}
-
-fn insert_path_recursive(
-    repo: &Repository,
-    existing: Option<&git2::Tree<'_>>,
-    components: &[&str],
-    blob_oid: Oid,
-) -> Result<Oid, Error> {
-    assert!(!components.is_empty());
-
-    let name = components[0];
-
-    if components.len() == 1 {
-        // Leaf: insert the blob.
-        let mut builder = repo.treebuilder(existing)?;
-        builder.insert(name, blob_oid, 0o100644)?;
-        return builder.write();
-    }
-
-    // Intermediate directory: recurse.
-    let sub_existing = match existing {
-        Some(tree) => match tree.get_name(name) {
-            Some(entry) if entry.kind() == Some(git2::ObjectType::Tree) => {
-                Some(repo.find_tree(entry.id())?)
-            }
-            _ => None,
-        },
-        None => None,
-    };
-
-    let child_oid = insert_path_recursive(repo, sub_existing.as_ref(), &components[1..], blob_oid)?;
-
-    let mut builder = repo.treebuilder(existing)?;
-    builder.insert(name, child_oid, 0o040000)?;
-    builder.write()
-}
-
-/// Remove a `/`-separated path from a tree, cleaning up empty parent directories.
-/// Returns `None` if the tree becomes empty.
-fn remove_path_from_tree(
-    repo: &Repository,
-    tree: &git2::Tree<'_>,
-    path: &str,
-) -> Result<Option<Oid>, Error> {
-    let components: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-    if components.is_empty() {
-        return Err(Error::from_str("empty path"));
-    }
-    remove_path_recursive(repo, tree, &components)
-}
-
-fn remove_path_recursive(
-    repo: &Repository,
-    tree: &git2::Tree<'_>,
-    components: &[&str],
-) -> Result<Option<Oid>, Error> {
-    assert!(!components.is_empty());
-    let name = components[0];
-
-    if components.len() == 1 {
-        // Leaf: remove the entry.
-        let mut builder = repo.treebuilder(Some(tree))?;
-        if builder.get(name)?.is_none() {
-            return Err(Error::from_str("path not found"));
-        }
-        builder.remove(name)?;
-        if builder.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(builder.write()?))
-        }
-    } else {
-        // Intermediate: recurse into subtree.
-        let entry = tree
-            .get_name(name)
-            .ok_or_else(|| Error::from_str("path not found"))?;
-        let subtree = repo.find_tree(entry.id())?;
-        let child_oid = remove_path_recursive(repo, &subtree, &components[1..])?;
-
-        let mut builder = repo.treebuilder(Some(tree))?;
-        match child_oid {
-            Some(oid) => {
-                builder.insert(name, oid, 0o040000)?;
-            }
-            None => {
-                builder.remove(name)?;
-            }
-        }
-        if builder.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(builder.write()?))
-        }
-    }
-}
-
-/// Check if a path exists in a tree.
-fn path_exists_in_tree(repo: &Repository, tree: &git2::Tree<'_>, path: &str) -> bool {
-    let components: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-    if components.is_empty() {
-        return false;
-    }
-    path_exists_recursive(repo, tree, &components)
-}
-
-fn path_exists_recursive(repo: &Repository, tree: &git2::Tree<'_>, components: &[&str]) -> bool {
-    if components.is_empty() {
-        return false;
-    }
-    match tree.get_name(components[0]) {
-        None => false,
-        Some(entry) => {
-            if components.len() == 1 {
-                true
-            } else if entry.kind() == Some(git2::ObjectType::Tree) {
-                match repo.find_tree(entry.id()) {
-                    Ok(subtree) => path_exists_recursive(repo, &subtree, &components[1..]),
-                    Err(_) => false,
-                }
-            } else {
-                false
-            }
-        }
-    }
-}
-
-/// Match a path against a glob-like pattern.
-/// Supports `*` (any single component) and `**` (any number of components).
-/// Also supports plain prefix matching (e.g. `labels` matches `labels/bug`).
-fn glob_matches(pattern: &str, path: &str) -> bool {
-    let pat_parts: Vec<&str> = pattern.split('/').filter(|s| !s.is_empty()).collect();
-    let path_parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-
-    // Exact match shortcut.
-    if pattern == path {
-        return true;
-    }
-
-    // Prefix match: pattern `foo` matches `foo/bar/baz`.
-    if !pat_parts.is_empty()
-        && !pat_parts.iter().any(|p| *p == "*" || *p == "**")
-        && path_parts.starts_with(&pat_parts)
-    {
-        return true;
-    }
-
-    glob_match_recursive(&pat_parts, &path_parts)
-}
-
-fn glob_match_recursive(pattern: &[&str], path: &[&str]) -> bool {
-    if pattern.is_empty() {
-        return path.is_empty();
-    }
-
-    if pattern[0] == "**" {
-        // `**` matches zero or more components.
-        let rest_pat = &pattern[1..];
-        for i in 0..=path.len() {
-            if glob_match_recursive(rest_pat, &path[i..]) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    if path.is_empty() {
-        return false;
-    }
-
-    let matches_component = pattern[0] == "*" || pattern[0] == path[0];
-    if matches_component {
-        glob_match_recursive(&pattern[1..], &path[1..])
-    } else {
-        false
-    }
-}
-
-/// Recursively collect leaf paths (blobs) from a tree, building up the
-/// `/`-separated path as we descend.  Calls `cb` for each leaf found.
-fn collect_leaf_paths(
-    repo: &Repository,
-    tree: &git2::Tree<'_>,
-    prefix: &str,
-    cb: &mut dyn FnMut(String),
-) -> Result<(), Error> {
-    for entry in tree.iter() {
-        let name = match entry.name() {
-            Some(n) => n,
-            None => continue,
-        };
-        let full = if prefix.is_empty() {
-            name.to_string()
-        } else {
-            format!("{}/{}", prefix, name)
-        };
-        if entry.kind() == Some(git2::ObjectType::Tree) {
-            let subtree = repo.find_tree(entry.id())?;
-            collect_leaf_paths(repo, &subtree, &full, cb)?;
-        } else {
-            cb(full);
-        }
-    }
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Implementation for git2::Repository
-// ---------------------------------------------------------------------------
-
-impl MetadataIndex for Repository {
-    fn metadata_list(&self, ref_name: &str) -> Result<Vec<(Oid, Oid)>, Error> {
-        let root = match resolve_root_tree(self, ref_name)? {
-            Some(t) => t,
-            None => return Ok(Vec::new()),
-        };
-        collect_entries(self, &root, "")
-    }
-
-    fn metadata_get(&self, ref_name: &str, target: &Oid) -> Result<Option<Oid>, Error> {
-        let root = match resolve_root_tree(self, ref_name)? {
-            Some(t) => t,
-            None => return Ok(None),
-        };
-        Ok(detect_fanout(self, &root, target)?.map(|(_, _, oid)| oid))
-    }
-
-    fn metadata(
-        &self,
-        ref_name: &str,
-        target: &Oid,
-        tree: &Oid,
-        opts: &MetadataOptions,
-    ) -> Result<Oid, Error> {
-        self.find_tree(*tree)?;
-
-        let (segments, leaf) = shard_oid(target, opts.shard_level)?;
-        let existing_root = resolve_root_tree(self, ref_name)?;
-
-        if !opts.force
-            && let Some(ref root) = existing_root
-            && detect_fanout(self, root, target)?.is_some()
-        {
-            return Err(Error::from_str(
-                "metadata entry already exists (use force to overwrite)",
-            ));
-        }
-
-        build_fanout(self, existing_root.as_ref(), &segments, &leaf, tree)
-    }
-
-    fn metadata_commit(&self, ref_name: &str, root: Oid, message: &str) -> Result<Oid, Error> {
-        commit_index(self, ref_name, root, message)
-    }
-
-    fn metadata_show(&self, ref_name: &str, target: &Oid) -> Result<Vec<MetadataEntry>, Error> {
-        let root = match resolve_root_tree(self, ref_name)? {
-            Some(t) => t,
-            None => return Ok(Vec::new()),
-        };
-
-        let tree_oid = match detect_fanout(self, &root, target)? {
-            Some((_, _, oid)) => oid,
-            None => return Ok(Vec::new()),
-        };
-
-        let tree = self.find_tree(tree_oid)?;
-        collect_tree_entries(self, &tree, "")
-    }
-
-    fn metadata_add(
-        &self,
-        ref_name: &str,
-        target: &Oid,
-        path: &str,
-        content: Option<&[u8]>,
-        opts: &MetadataOptions,
-    ) -> Result<Oid, Error> {
-        let blob_oid = self.blob(content.unwrap_or(b""))?;
-
-        let existing_root = resolve_root_tree(self, ref_name)?;
-
-        // Get existing metadata tree for this target, if any.
-        let existing_meta_tree = match &existing_root {
-            Some(root) => match detect_fanout(self, root, target)? {
-                Some((_, _, oid)) => Some(self.find_tree(oid)?),
-                None => None,
-            },
-            None => None,
-        };
-
-        // Check if path already exists.
-        if !opts.force
-            && let Some(ref meta_tree) = existing_meta_tree
-            && path_exists_in_tree(self, meta_tree, path)
-        {
-            return Err(Error::from_str(
-                "path already exists in metadata (use --force to overwrite)",
-            ));
-        }
-
-        // Build new metadata tree with the path inserted.
-        let new_meta_tree_oid =
-            insert_path_into_tree(self, existing_meta_tree.as_ref(), path, blob_oid)?;
-
-        // Now set this as the metadata tree for the target.
-        let (segments, leaf) = if existing_meta_tree.is_some() {
-            // Re-detect to find the current shard layout.
-            match &existing_root {
-                Some(root) => match detect_fanout(self, root, target)? {
-                    Some((s, l, _)) => (s, l),
-                    None => shard_oid(target, opts.shard_level)?,
-                },
-                None => shard_oid(target, opts.shard_level)?,
-            }
-        } else {
-            shard_oid(target, opts.shard_level)?
-        };
-
-        let new_root = build_fanout(
-            self,
-            existing_root.as_ref(),
-            &segments,
-            &leaf,
-            &new_meta_tree_oid,
-        )?;
-
-        let msg = format!("metadata: add {} to {}", path, target);
-        commit_index(self, ref_name, new_root, &msg)?;
-
-        Ok(new_meta_tree_oid)
-    }
-
-    fn metadata_remove_paths(
-        &self,
-        ref_name: &str,
-        target: &Oid,
-        patterns: &[&str],
-        keep: bool,
-    ) -> Result<bool, Error> {
-        let root = match resolve_root_tree(self, ref_name)? {
-            Some(t) => t,
-            None => return Ok(false),
-        };
-
-        let (segments, leaf, meta_oid) = match detect_fanout(self, &root, target)? {
-            Some(t) => t,
-            None => return Ok(false),
-        };
-
-        let meta_tree = self.find_tree(meta_oid)?;
-        let patterns_owned: Vec<String> = patterns.iter().map(|s| s.to_string()).collect();
-        let new_meta_tree = self.filter_by_predicate(&meta_tree, |_repo, path| {
-            let path_str = path.to_str().unwrap_or("");
-            let matched = patterns_owned.iter().any(|p| glob_matches(p, path_str));
-            if keep { matched } else { !matched }
-        })?;
-
-        if new_meta_tree.is_empty() {
-            // Metadata tree is now empty — remove the entire entry.
-            match build_fanout_remove(self, &root, &segments, &leaf)? {
-                RemoveResult::NotFound => Ok(false),
-                RemoveResult::Empty => {
-                    let mut reference = self.find_reference(ref_name)?;
-                    reference.delete()?;
-                    Ok(true)
-                }
-                RemoveResult::Removed(new_root) => {
-                    let msg = format!("metadata: remove paths from {}", target);
-                    commit_index(self, ref_name, new_root, &msg)?;
-                    Ok(true)
-                }
-            }
-        } else if new_meta_tree.id() == meta_oid {
-            Ok(false)
-        } else {
-            let new_root = build_fanout(self, Some(&root), &segments, &leaf, &new_meta_tree.id())?;
-            let msg = format!("metadata: remove paths from {}", target);
-            commit_index(self, ref_name, new_root, &msg)?;
-            Ok(true)
-        }
-    }
-
-    fn metadata_remove(&self, ref_name: &str, target: &Oid) -> Result<bool, Error> {
-        let root = match resolve_root_tree(self, ref_name)? {
-            Some(t) => t,
-            None => return Ok(false),
-        };
-
-        let (segments, leaf) = match detect_fanout(self, &root, target)? {
-            Some((segments, leaf, _)) => (segments, leaf),
-            None => return Ok(false),
-        };
-
-        match build_fanout_remove(self, &root, &segments, &leaf)? {
-            RemoveResult::NotFound => Ok(false),
-            RemoveResult::Empty => {
-                let mut reference = self.find_reference(ref_name)?;
-                reference.delete()?;
-                Ok(true)
-            }
-            RemoveResult::Removed(new_root) => {
-                let msg = format!("metadata: remove {}", target);
-                commit_index(self, ref_name, new_root, &msg)?;
-                Ok(true)
-            }
-        }
-    }
-
-    fn metadata_copy(
-        &self,
-        ref_name: &str,
-        from: &Oid,
-        to: &Oid,
-        opts: &MetadataOptions,
-    ) -> Result<Oid, Error> {
-        let root = match resolve_root_tree(self, ref_name)? {
-            Some(t) => t,
-            None => {
-                return Err(Error::from_str(&format!(
-                    "no metadata entry for source {}",
-                    from
-                )));
-            }
-        };
-
-        let source_tree_oid = match detect_fanout(self, &root, from)? {
-            Some((_, _, oid)) => oid,
-            None => {
-                return Err(Error::from_str(&format!(
-                    "no metadata entry for source {}",
-                    from
-                )));
-            }
-        };
-
-        if !opts.force && detect_fanout(self, &root, to)?.is_some() {
-            return Err(Error::from_str(
-                "metadata entry already exists for target (use --force to overwrite)",
-            ));
-        }
-
-        let (segments, leaf) = shard_oid(to, opts.shard_level)?;
-        let new_root = build_fanout(self, Some(&root), &segments, &leaf, &source_tree_oid)?;
-
-        let msg = format!("metadata: copy {} -> {}", from, to);
-        commit_index(self, ref_name, new_root, &msg)?;
-
-        Ok(source_tree_oid)
-    }
-
-    fn metadata_prune(&self, ref_name: &str, dry_run: bool) -> Result<Vec<Oid>, Error> {
-        let entries = self.metadata_list(ref_name)?;
-        let mut pruned = Vec::new();
-        let odb = self.odb()?;
-
-        for (target, _) in &entries {
-            if !odb.exists(*target) {
-                pruned.push(*target);
-            }
-        }
-
-        if !dry_run && !pruned.is_empty() {
-            let mut root = match resolve_root_tree(self, ref_name)? {
-                Some(t) => t,
-                None => return Ok(pruned),
-            };
-
-            for target in &pruned {
-                let (segments, leaf) = match detect_fanout(self, &root, target)? {
-                    Some((segments, leaf, _)) => (segments, leaf),
-                    None => continue,
-                };
-
-                match build_fanout_remove(self, &root, &segments, &leaf)? {
-                    RemoveResult::NotFound => {}
-                    RemoveResult::Empty => {
-                        let mut reference = self.find_reference(ref_name)?;
-                        reference.delete()?;
-                        return Ok(pruned);
-                    }
-                    RemoveResult::Removed(new_root) => {
-                        root = self.find_tree(new_root)?;
-                    }
-                }
-            }
-
-            // Single commit for all removals
-            let msg = format!("metadata: prune {} entries", pruned.len());
-            commit_index(self, ref_name, root.id(), &msg)?;
-        }
-
-        Ok(pruned)
-    }
-
-    fn metadata_get_ref(&self, ref_name: &str) -> String {
-        ref_name.to_string()
-    }
-
-    fn link(
-        &self,
-        ref_name: &str,
-        a: &str,
-        b: &str,
-        forward: &str,
-        reverse: &str,
-        meta: Option<&[u8]>,
-    ) -> Result<Oid, Error> {
-        let blob_oid = self.blob(meta.unwrap_or(b""))?;
-        let existing_root = resolve_root_tree(self, ref_name)?;
-
-        // Insert a/<forward>/<b>
-        let forward_path = format!("{}/{}/{}", a, forward, b);
-        let tree1 = insert_path_into_tree(self, existing_root.as_ref(), &forward_path, blob_oid)?;
-
-        // Insert b/<reverse>/<a> into the same tree
-        let reverse_path = format!("{}/{}/{}", b, reverse, a);
-        let tree1_obj = self.find_tree(tree1)?;
-        let tree2 = insert_path_into_tree(self, Some(&tree1_obj), &reverse_path, blob_oid)?;
-
-        let msg = format!("link: {} -[{}]-> {}", a, forward, b);
-        commit_index(self, ref_name, tree2, &msg)?;
-        Ok(tree2)
-    }
-
-    fn unlink(
-        &self,
-        ref_name: &str,
-        a: &str,
-        b: &str,
-        forward: &str,
-        reverse: &str,
-    ) -> Result<Oid, Error> {
-        let root =
-            resolve_root_tree(self, ref_name)?.ok_or_else(|| Error::from_str("ref not found"))?;
-
-        // Remove a/<forward>/<b>
-        let forward_path = format!("{}/{}/{}", a, forward, b);
-        let tree1 = remove_path_from_tree(self, &root, &forward_path)?
-            .ok_or_else(|| Error::from_str("tree became empty after unlink"))?;
-
-        // Remove b/<reverse>/<a>
-        let tree1_obj = self.find_tree(tree1)?;
-        let reverse_path = format!("{}/{}/{}", b, reverse, a);
-        let tree2_opt = remove_path_from_tree(self, &tree1_obj, &reverse_path)?;
-
-        match tree2_opt {
-            Some(tree2) => {
-                let msg = format!("unlink: {} -[{}]-> {}", a, forward, b);
-                commit_index(self, ref_name, tree2, &msg)?;
-                Ok(tree2)
-            }
-            None => {
-                // Tree is empty — delete the ref
-                let mut reference = self.find_reference(ref_name)?;
-                reference.delete()?;
-                let empty = self.treebuilder(None)?.write()?;
-                Ok(empty)
-            }
-        }
-    }
-
-    fn linked(
-        &self,
-        ref_name: &str,
-        key: &str,
-        relation: Option<&str>,
-    ) -> Result<Vec<(String, String)>, Error> {
-        let root = match resolve_root_tree(self, ref_name)? {
-            Some(t) => t,
-            None => return Ok(Vec::new()),
-        };
-
-        // Find the key's subtree — handle keys containing '/'
-        let key_tree = if key.contains('/') {
-            let components: Vec<&str> = key.split('/').filter(|s| !s.is_empty()).collect();
-            let mut current = root.clone();
-            for component in &components {
-                let next_id = match current.get_name(component) {
-                    Some(e) if e.kind() == Some(git2::ObjectType::Tree) => e.id(),
-                    _ => return Ok(Vec::new()),
-                };
-                current = self.find_tree(next_id)?;
-            }
-            current
-        } else {
-            let key_entry = match root.get_name(key) {
-                Some(e) => e,
-                None => return Ok(Vec::new()),
-            };
-            self.find_tree(key_entry.id())?
-        };
-
-        let mut results = Vec::new();
-
-        if let Some(rel) = relation {
-            // Only look at one relation
-            if let Some(rel_entry) = key_tree.get_name(rel)
-                && rel_entry.kind() == Some(git2::ObjectType::Tree)
-            {
-                let rel_tree = self.find_tree(rel_entry.id())?;
-                collect_leaf_paths(self, &rel_tree, "", &mut |path| {
-                    results.push((rel.to_string(), path));
-                })?;
-            }
-        } else {
-            // All relations
-            for rel_entry in key_tree.iter() {
-                if rel_entry.kind() == Some(git2::ObjectType::Tree) {
-                    let rel_name = rel_entry.name().unwrap_or("").to_string();
-                    let rel_tree = self.find_tree(rel_entry.id())?;
-                    collect_leaf_paths(self, &rel_tree, "", &mut |path| {
-                        results.push((rel_name.clone(), path));
-                    })?;
-                }
-            }
-        }
-
-        Ok(results)
-    }
-
-    fn is_linked(&self, ref_name: &str, a: &str, b: &str, forward: &str) -> Result<bool, Error> {
-        let root = match resolve_root_tree(self, ref_name)? {
-            Some(t) => t,
-            None => return Ok(false),
-        };
-        let path = format!("{}/{}/{}", a, forward, b);
-        Ok(path_exists_in_tree(self, &root, &path))
-    }
-}
+//! Relate data of any shape to Git objects.
+//!
+//! `git-metadata` attaches arbitrary tree-shaped data to any Git object,
+//! mirroring the storage model used by `git notes` but generalized: where a
+//! note is a single blob keyed by the annotated object's id, a metadata entry
+//! is a tree keyed the same way. This lets callers attach structured data
+//! (multiple files, nested directories) to commits, blobs, trees, or tags
+//! without inventing their own ref layout.
+//!
+//! # Model
+//!
+//! Entries live under a Git ref (default `refs/metadata/commits`, see
+//! [`MetadataRepository::metadata_default_ref`]). The ref points at a commit
+//! whose tree is the *fanout tree*: a directory tree that maps an annotated
+//! object's hash to a stored metadata tree by splitting the hex id into 2-byte
+//! prefix segments. The number of prefix segments is the *fanout depth*, read
+//! from a `.fanout` blob at the root of the tree and defaulting to
+//! [`DEFAULT_FANOUT`] (the git-notes shape: `ab/cdef…`).
+//!
+//! See [`MetadataRepository`] for the full description of the fanout layout
+//! and the per-method contracts.
+//!
+//! # Example
+//!
+//! Attach a metadata tree to a blob and read it back:
+//!
+//! ```
+//! use git_metadata::MetadataRepository;
+//!
+//! let dir = tempfile::tempdir().expect("tempdir");
+//! let repo = gix::init(dir.path()).expect("init repository");
+//!
+//! let target = repo.write_blob(b"hello")?.detach();
+//! let metadata = repo.write_object(gix::objs::Tree::empty())?.detach();
+//!
+//! let sig = gix::actor::SignatureRef {
+//!     name: "Tester".into(),
+//!     email: "t@example.com".into(),
+//!     time: "0 +0000".into(),
+//! };
+//! repo.metadata(sig, sig, None, None, target, &metadata, false)?;
+//!
+//! let entries = repo.metadatas(None)?;
+//! assert_eq!(entries.len(), 1);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+
+mod error;
+mod metadata;
+mod repository;
+mod tree;
+
+#[cfg(feature = "cli")]
+pub mod exe;
 
 #[cfg(test)]
 mod tests;
+
+pub use error::Error;
+pub use metadata::Metadata;
+pub use repository::MetadataRepository;
+
+/// Fanout depth assumed when no `.fanout` blob is present at the root of a
+/// metadata tree. Matches the git-notes shape (one 2-byte directory level).
+pub const DEFAULT_FANOUT: u8 = 1;
+
+fn resolve_ref<'a>(
+    repo: &gix::Repository,
+    metadatas_ref: Option<&'a str>,
+) -> Result<std::borrow::Cow<'a, str>, Error> {
+    Ok(match metadatas_ref {
+        Some(r) => std::borrow::Cow::Borrowed(r),
+        None => std::borrow::Cow::Owned(repo.metadata_default_ref()?),
+    })
+}
+
+impl MetadataRepository for gix::Repository {
+    #[allow(clippy::too_many_arguments)]
+    fn metadata(
+        &self,
+        author: gix::actor::SignatureRef<'_>,
+        committer: gix::actor::SignatureRef<'_>,
+        message: Option<&str>,
+        metadatas_ref: Option<&str>,
+        oid: gix::ObjectId,
+        metadata: &gix::ObjectId,
+        force: bool,
+    ) -> Result<gix::ObjectId, Error> {
+        let metadatas_ref = resolve_ref(self, metadatas_ref)?;
+        let metadatas_ref = metadatas_ref.as_ref();
+
+        if oid.kind() != self.object_hash() {
+            return Err(Error::UnsupportedHashKind(oid, oid.kind()));
+        }
+        let metadata_header = self
+            .try_find_header(*metadata)?
+            .ok_or(Error::NotFound(*metadata))?;
+        if metadata_header.kind() != gix::object::Kind::Tree {
+            return Err(Error::InvalidType(metadata_header.kind()));
+        }
+
+        // Refs can target any object; we accept a tree-rooted ref as a
+        // bootstrap shape and migrate to commit-rooted on first write.
+        let (prior_ref_target, parents, root_tree, depth) =
+            match self.try_find_reference(metadatas_ref)? {
+                Some(mut r) => {
+                    let target = r.peel_to_id()?.detach();
+                    let header = self
+                        .try_find_header(target)?
+                        .ok_or(Error::NotFound(target))?;
+                    match header.kind() {
+                        gix::object::Kind::Commit => {
+                            let commit = self.find_commit(target)?;
+                            let tree = commit.tree_id()?.detach();
+                            let depth = self.metadata_ref_fanout(Some(metadatas_ref))?;
+                            (Some(target), vec![target], tree, depth)
+                        }
+                        gix::object::Kind::Tree => {
+                            let depth = self.metadata_ref_fanout(Some(metadatas_ref))?;
+                            (Some(target), Vec::new(), target, depth)
+                        }
+                        k => return Err(Error::InvalidRootType(k)),
+                    }
+                }
+                None => {
+                    let empty = self.write_object(gix::objs::Tree::empty())?.detach();
+                    (None, Vec::new(), empty, DEFAULT_FANOUT)
+                }
+            };
+
+        let path = tree::fanout_path(oid, depth);
+        let new_root = tree::insert_leaf(
+            self,
+            root_tree,
+            &path,
+            *metadata,
+            gix::objs::tree::EntryKind::Tree,
+            force,
+            oid,
+        )?;
+        let new_root = tree::ensure_fanout_blob(self, new_root, depth)?;
+
+        let commit = gix::objs::Commit {
+            message: message.unwrap_or("metadata: update").into(),
+            tree: new_root,
+            author: author.into(),
+            committer: committer.into(),
+            encoding: None,
+            parents: parents.into_iter().collect(),
+            extra_headers: Default::default(),
+        };
+        let commit_id = self.write_object(&commit)?.detach();
+
+        // CAS guard: require the ref to still hold the target we snapshotted,
+        // so a concurrent writer's commit isn't silently clobbered.
+        let expected = match prior_ref_target {
+            Some(prior) => gix::refs::transaction::PreviousValue::ExistingMustMatch(
+                gix::refs::Target::Object(prior),
+            ),
+            None => gix::refs::transaction::PreviousValue::MustNotExist,
+        };
+        self.reference(
+            metadatas_ref,
+            commit_id,
+            expected,
+            message.unwrap_or("metadata: update"),
+        )?;
+        Ok(commit_id)
+    }
+
+    /// The current implementation is infallible, but the `Result` is reserved
+    /// for future configuration-driven defaults (e.g. a repository config key)
+    /// that may surface I/O or parse errors.
+    fn metadata_default_ref(&self) -> Result<String, Error> {
+        Ok("refs/metadata/commits".to_string())
+    }
+
+    fn metadata_ref_fanout(&self, metadatas_ref: Option<&str>) -> Result<u8, Error> {
+        let metadatas_ref = resolve_ref(self, metadatas_ref)?;
+        let tree = self
+            .find_reference(metadatas_ref.as_ref())?
+            .peel_to_tree()?;
+        tree::fanout_from_tree(self, tree.id)
+    }
+
+    fn metadata_delete(
+        &self,
+        id: gix::ObjectId,
+        metadatas_ref: Option<&str>,
+        author: gix::actor::SignatureRef<'_>,
+        committer: gix::actor::SignatureRef<'_>,
+        message: Option<&str>,
+    ) -> Result<(), Error> {
+        let metadatas_ref = resolve_ref(self, metadatas_ref)?;
+        let metadatas_ref = metadatas_ref.as_ref();
+
+        // Snapshot the ref once so depth and target both derive from the
+        // same tree, avoiding a torn read against a concurrent writer.
+        let target = self.find_reference(metadatas_ref)?.peel_to_id()?.detach();
+        let header = self
+            .try_find_header(target)?
+            .ok_or(Error::NotFound(target))?;
+        let (parents, root_tree) = match header.kind() {
+            gix::object::Kind::Commit => {
+                let commit = self.find_commit(target)?;
+                (vec![target], commit.tree_id()?.detach())
+            }
+            gix::object::Kind::Tree => (Vec::new(), target),
+            k => return Err(Error::InvalidRootType(k)),
+        };
+        let depth = tree::fanout_from_tree(self, root_tree)?;
+
+        let path = tree::fanout_path(id, depth);
+        let new_root = tree::remove_leaf(self, root_tree, &path, id)?;
+
+        let commit = gix::objs::Commit {
+            message: message.unwrap_or("metadata: delete").into(),
+            tree: new_root,
+            author: author.into(),
+            committer: committer.into(),
+            encoding: None,
+            parents: parents.into_iter().collect(),
+            extra_headers: Default::default(),
+        };
+        let commit_id = self.write_object(&commit)?.detach();
+
+        let expected = gix::refs::transaction::PreviousValue::ExistingMustMatch(
+            gix::refs::Target::Object(target),
+        );
+        self.reference(
+            metadatas_ref,
+            commit_id,
+            expected,
+            message.unwrap_or("metadata: delete"),
+        )?;
+        Ok(())
+    }
+
+    fn metadatas(&self, metadatas_ref: Option<&str>) -> Result<Vec<Metadata>, Error> {
+        let metadatas_ref = resolve_ref(self, metadatas_ref)?;
+        let metadatas_ref = metadatas_ref.as_ref();
+
+        let depth = self.metadata_ref_fanout(Some(metadatas_ref))?;
+        let tree = self.find_reference(metadatas_ref)?.peel_to_tree()?;
+        let hash_hex_len = tree.id.kind().len_in_hex();
+
+        let prefix_segs = depth as usize;
+        let leaf_seg_len = hash_hex_len - 2 * prefix_segs;
+        let entries = tree.traverse().breadthfirst.files()?;
+        let mut out = Vec::new();
+        let mut hex: Vec<u8> = Vec::with_capacity(hash_hex_len);
+
+        for entry in entries {
+            if !entry.mode.is_tree() {
+                continue;
+            }
+            hex.clear();
+            let mut segs = 0usize;
+            let mut shape_ok = true;
+            for seg in entry.filepath.split(|b| *b == b'/') {
+                segs += 1;
+                let want = if segs <= prefix_segs { 2 } else { leaf_seg_len };
+                if segs > prefix_segs + 1
+                    || seg.len() != want
+                    || !seg.iter().all(u8::is_ascii_hexdigit)
+                {
+                    shape_ok = false;
+                    break;
+                }
+                hex.extend_from_slice(seg);
+            }
+            if !shape_ok || segs != prefix_segs + 1 {
+                continue;
+            }
+            let id = gix::ObjectId::from_hex(&hex).expect("shape-validated hex");
+            out.push(Metadata::new(self, id, entry.oid)?);
+        }
+        Ok(out)
+    }
+
+    fn find_metadata(
+        &self,
+        metadatas_ref: Option<&str>,
+        id: gix::ObjectId,
+    ) -> Result<gix::ObjectId, Error> {
+        let metadatas_ref = resolve_ref(self, metadatas_ref)?;
+        let metadatas_ref = metadatas_ref.as_ref();
+
+        let depth = self.metadata_ref_fanout(Some(metadatas_ref))?;
+        let path = tree::fanout_path(id, depth);
+        let mut tree = self.find_reference(metadatas_ref)?.peel_to_tree()?;
+        let (leaf, segs) = path
+            .split_last()
+            .expect("fanout_path yields depth + 1 segments");
+        for seg in segs {
+            let entry = tree.find_entry(seg.as_slice()).ok_or(Error::NotFound(id))?;
+            if !entry.mode().is_tree() {
+                return Err(Error::FanoutPathConflict(seg.clone()));
+            }
+            tree = self.find_tree(entry.oid())?;
+        }
+        let entry = tree
+            .find_entry(leaf.as_slice())
+            .ok_or(Error::NotFound(id))?;
+        if !entry.mode().is_tree() {
+            return Err(Error::FanoutPathConflict(leaf.clone()));
+        }
+        Ok(entry.oid().into())
+    }
+}

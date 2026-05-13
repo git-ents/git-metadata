@@ -13,12 +13,21 @@ documentation = "https://docs.rs/git-metadata"
 [[bin]]
 name = "git-metadata"
 path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+cli = ["dep:anyhow", "dep:clap", "dep:clap_mangen"]
 
 [dependencies]
-clap = { version = "4.5.60", features = ["derive"] }
-clap_mangen = "0.2.31"
-git-filter-tree = "0.3.1"
-git2 = "0.20.4"
+anyhow = { version = "1.0.102", optional = true }
+clap = { version = "4.5.60", features = ["derive"], optional = true }
+clap_mangen = { version = "0.2.31", optional = true }
+gix = "0.83.0"
+thiserror = "2.0.18"
 
 [dev-dependencies]
+gix = { version = "0.83.0", features = ["sha256"] }
+proptest = "1.5.0"
+rstest = "0.23.0"
 tempfile = "3.27.0"

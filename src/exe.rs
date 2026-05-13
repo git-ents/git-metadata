@@ -1,118 +1,324 @@
+//! CLI runtime layer: a thin, side-effecting wrapper around the
+//! [`MetadataRepository`] trait suitable for driving from `main`.
+//!
+//! Each [`Executor`] method maps one-to-one onto a CLI subcommand. Output is
+//! written to a caller-supplied [`Write`] so the harness can capture it for
+//! tests; errors bubble up as [`anyhow::Error`] so the CLI can render them
+//! uniformly.
+
+#![allow(dead_code, unused_variables)]
+
+use std::io::Write;
 use std::path::Path;
 
-use git2::{Oid, Repository};
+use anyhow::{Context, Result};
+use gix::bstr::BString;
+use gix::objs::tree::{Entry, EntryKind};
 
-use git_metadata::{MetadataEntry, MetadataIndex, MetadataOptions};
+use crate::{Error as MetadataError, MetadataRepository, tree as helpers};
 
-/// Open a repository from the given path, or from the environment / current
-/// directory when `None` is passed.
-pub fn open_repo(path: Option<&Path>) -> Result<Repository, git2::Error> {
-    match path {
-        Some(p) => Repository::open(p),
-        None => Repository::open_from_env(),
+/// Handle to an open repository, parameterized over the metadata ref name.
+pub struct Executor {
+    inner: gix::Repository,
+    metadatas_ref: String,
+}
+
+impl Executor {
+    /// Open the repository at `path`, or discover from the current directory.
+    pub fn open(path: Option<&Path>) -> Result<Self> {
+        let inner = match path {
+            Some(p) => gix::discover(p).with_context(|| format!("opening repo at {p:?}"))?,
+            None => gix::discover(".").context("discovering repo from current directory")?,
+        };
+        let metadatas_ref = inner.metadata_default_ref()?;
+        Ok(Self {
+            inner,
+            metadatas_ref,
+        })
+    }
+
+    /// Override the metadata ref used by every subsequent operation.
+    pub fn with_ref(mut self, r: impl Into<String>) -> Self {
+        self.metadatas_ref = r.into();
+        self
+    }
+
+    /// Configured metadata ref (e.g. `refs/metadata/commits`).
+    pub fn metadatas_ref(&self) -> &str {
+        &self.metadatas_ref
+    }
+
+    /// Resolve a revision string (OID, ref, `HEAD~2`, …) to an object id.
+    pub fn resolve_oid(&self, rev: &str) -> Result<gix::ObjectId> {
+        let id = self
+            .inner
+            .rev_parse_single(rev)
+            .with_context(|| format!("resolving revision `{rev}`"))?;
+        Ok(id.detach())
+    }
+
+    /// Print one line per target with metadata, formatted `<target> <tree>`.
+    pub fn list_targets(&self, out: &mut dyn Write) -> Result<()> {
+        let entries = self.inner.metadatas(Some(&self.metadatas_ref))?;
+        for m in entries {
+            writeln!(out, "{} {}", m.id(), m.data())?;
+        }
+        Ok(())
+    }
+
+    /// Print one line per leaf in the metadata tree attached to `target`,
+    /// formatted like `git ls-tree -r`: `<mode> <type> <oid>\t<path>`.
+    pub fn ls_tree(&self, target: gix::ObjectId, out: &mut dyn Write) -> Result<()> {
+        let tree_id = self
+            .inner
+            .find_metadata(Some(&self.metadatas_ref), target)?;
+        let tree = self.inner.find_tree(tree_id)?;
+        for entry in tree.traverse().breadthfirst.files()? {
+            if entry.mode.is_tree() {
+                continue;
+            }
+            writeln!(
+                out,
+                "{:06o} {} {}\t{}",
+                entry.mode.value(),
+                entry.mode.as_str(),
+                entry.oid,
+                entry.filepath
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Plant `oid` at `path` inside `target`'s metadata tree.
+    ///
+    /// The primitive single-entry insert. `oid` is the pre-written object
+    /// id and `kind` selects the entry mode:
+    ///
+    /// - [`EntryKind::Blob`] / [`EntryKind::BlobExecutable`] / [`EntryKind::Link`]:
+    ///   the oid is trusted as-is; the bytes are not fetched or validated.
+    ///   For `Link`, the blob's content is the symlink target.
+    /// - [`EntryKind::Commit`] (gitlink): the oid is trusted as a commit
+    ///   pointer; it is *not* required to exist in this repository, since
+    ///   gitlinks model unresolved references (submodule semantics).
+    /// - [`EntryKind::Tree`]: the oid is verified to exist and decode as a
+    ///   tree, because a bogus tree oid would silently corrupt the parent.
+    ///
+    /// When `force` is false and an entry already exists at `path`, returns
+    /// an error. Successive calls at different paths compose. Returns the
+    /// commit id at the new tip of the metadata ref.
+    ///
+    /// `message` overrides the default commit message; `author` overrides
+    /// the configured identity for the commit's author (committer is always
+    /// taken from config).
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert(
+        &self,
+        target: gix::ObjectId,
+        path: &str,
+        kind: EntryKind,
+        oid: gix::ObjectId,
+        force: bool,
+        message: Option<&str>,
+        author: Option<gix::actor::SignatureRef<'_>>,
+    ) -> Result<gix::ObjectId> {
+        if matches!(kind, EntryKind::Tree) {
+            let header = self
+                .inner
+                .try_find_header(oid)?
+                .ok_or_else(|| anyhow::anyhow!("tree object {oid} not found"))?;
+            if header.kind() != gix::object::Kind::Tree {
+                anyhow::bail!("object {oid} is not a tree (found {:?})", header.kind());
+            }
+        }
+
+        let subtree = self.metadata_subtree_or_empty(target)?;
+        let segs = split_path(path)?;
+        let new_subtree =
+            helpers::insert_leaf(self.repo(), subtree, &segs, oid, kind, force, target)?;
+
+        let committer = self.committer()?;
+        let author = author.unwrap_or(committer);
+        self.inner
+            .metadata(
+                author,
+                committer,
+                message,
+                Some(&self.metadatas_ref),
+                target,
+                &new_subtree,
+                true,
+            )
+            .map_err(Into::into)
+    }
+
+    /// Copy entries from `src_tree` matching any of `patterns` into
+    /// `target`'s metadata tree, optionally nested under `dest_prefix`.
+    ///
+    /// `src_tree` is walked breadth-first; every non-tree leaf whose path
+    /// matches at least one [glob pattern][gix::glob] is reinserted at
+    /// either `<orig_path>` (when `dest_prefix` is `None`) or
+    /// `<dest_prefix>/<orig_path>`. Entry modes are preserved verbatim.
+    /// All matching entries are folded into one commit on the metadata ref.
+    /// `force` controls overwriting existing entries at the destination.
+    /// See [`upsert`](Self::upsert) for `message` and `author` semantics.
+    #[allow(clippy::too_many_arguments)]
+    pub fn import(
+        &self,
+        target: gix::ObjectId,
+        src_tree: gix::ObjectId,
+        patterns: &[&str],
+        dest_prefix: Option<&str>,
+        force: bool,
+        message: Option<&str>,
+        author: Option<gix::actor::SignatureRef<'_>>,
+    ) -> Result<gix::ObjectId> {
+        todo!()
+    }
+
+    /// Remove entries from `target`'s metadata tree by glob pattern.
+    ///
+    /// With `keep = false`, entries whose path matches any pattern are
+    /// removed; with `keep = true`, the predicate is inverted (entries that
+    /// match are retained, everything else is removed). When the metadata
+    /// tree is left empty the fanout leaf is deleted entirely and `None` is
+    /// returned; otherwise returns the commit id at the new tip of the
+    /// metadata ref. See [`upsert`](Self::upsert) for `message` and
+    /// `author` semantics.
+    pub fn remove(
+        &self,
+        target: gix::ObjectId,
+        patterns: &[&str],
+        keep: bool,
+        message: Option<&str>,
+        author: Option<gix::actor::SignatureRef<'_>>,
+    ) -> Result<Option<gix::ObjectId>> {
+        todo!()
+    }
+
+    /// List targets whose oid no longer exists in the object database.
+    ///
+    /// Read-only counterpart to [`prune`](Self::prune): returns the same set
+    /// of targets `prune` would drop, without modifying the metadata ref.
+    pub fn stale(&self) -> Result<Vec<gix::ObjectId>> {
+        todo!()
+    }
+
+    /// Copy `from`'s metadata tree to `to`.
+    ///
+    /// `force` controls whether existing entries at the destination are
+    /// overwritten. Returns the commit id at the new tip of the metadata ref.
+    pub fn copy(
+        &self,
+        from: gix::ObjectId,
+        to: gix::ObjectId,
+        force: bool,
+    ) -> Result<gix::ObjectId> {
+        todo!()
+    }
+
+    /// Drop entries whose target oid no longer exists in the object database.
+    ///
+    /// Returns the number of entries pruned (or that would be pruned, if
+    /// `dry_run`). Prints one target oid per line to `out`.
+    pub fn prune(&self, dry_run: bool, out: &mut dyn Write) -> Result<usize> {
+        todo!()
+    }
+
+    /// The underlying `gix` repository handle.
+    pub fn repo(&self) -> &gix::Repository {
+        &self.inner
+    }
+
+    fn committer(&self) -> Result<gix::actor::SignatureRef<'_>> {
+        match self.inner.committer() {
+            Some(Ok(s)) => Ok(s),
+            Some(Err(e)) => Err(e.into()),
+            None => Err(anyhow::anyhow!("no committer identity configured")),
+        }
+    }
+
+    fn current_metadata_tree(&self, target: gix::ObjectId) -> Result<gix::ObjectId> {
+        self.inner
+            .find_metadata(Some(self.metadatas_ref()), target)
+            .map_err(Into::into)
+    }
+
+    /// Like [`current_metadata_tree`], but returns an empty tree id when no
+    /// leaf exists yet for `target` (or the ref hasn't been created).
+    ///
+    /// [`current_metadata_tree`]: Self::current_metadata_tree
+    fn metadata_subtree_or_empty(&self, target: gix::ObjectId) -> Result<gix::ObjectId> {
+        if self
+            .inner
+            .try_find_reference(&self.metadatas_ref)?
+            .is_none()
+        {
+            return Ok(self.inner.write_object(gix::objs::Tree::empty())?.detach());
+        }
+        match self.inner.find_metadata(Some(&self.metadatas_ref), target) {
+            Ok(t) => Ok(t),
+            Err(MetadataError::NotFound(_)) => {
+                Ok(self.inner.write_object(gix::objs::Tree::empty())?.detach())
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 }
 
-/// Resolve a revision string (OID, ref, or `HEAD`) to an [`Oid`].
-pub fn resolve_oid(repo: &Repository, rev: &str) -> Result<Oid, git2::Error> {
-    // Try parsing as a full hex OID first.
-    if let Ok(oid) = Oid::from_str(rev) {
-        return Ok(oid);
+enum RemoveError {
+    NotFound,
+    NonTreeIntermediate(BString),
+    Other(anyhow::Error),
+}
+
+fn compile_patterns(patterns: &[&str]) -> Result<Vec<gix::glob::Pattern>> {
+    todo!()
+}
+
+fn split_path(path: &str) -> Result<Vec<BString>> {
+    let segs: Vec<BString> = path
+        .split('/')
+        .map(|s| BString::from(s.as_bytes()))
+        .collect();
+    for s in &segs {
+        let bytes: &[u8] = s.as_ref();
+        if bytes.is_empty() || bytes == b"." || bytes == b".." {
+            anyhow::bail!("invalid path {path:?}");
+        }
     }
-    // Fall back to rev-parse.
-    let obj = repo.revparse_single(rev)?;
-    Ok(obj.id())
+    Ok(segs)
 }
 
-/// List all targets that have metadata under `ref_name`.
-pub fn list(repo: &Repository, ref_name: &str) -> Result<Vec<(Oid, Oid)>, git2::Error> {
-    repo.metadata_list(ref_name)
+fn decode_entries(repo: &gix::Repository, tree: gix::ObjectId) -> Result<Vec<Entry>> {
+    let t = repo.find_tree(tree)?;
+    let decoded = t.decode()?;
+    Ok(decoded
+        .entries
+        .iter()
+        .map(|e| Entry {
+            mode: e.mode,
+            filename: e.filename.into(),
+            oid: e.oid.into(),
+        })
+        .collect())
 }
 
-/// Show the metadata tree entries for `target`.
-pub fn show(
-    repo: &Repository,
-    ref_name: &str,
-    target: &Oid,
-) -> Result<Vec<MetadataEntry>, git2::Error> {
-    repo.metadata_show(ref_name, target)
+fn remove_path(
+    repo: &gix::Repository,
+    tree: gix::ObjectId,
+    path: &[BString],
+) -> Result<gix::ObjectId, RemoveError> {
+    todo!()
 }
 
-/// Add a path entry (with optional content) to a target's metadata tree.
-pub fn add(
-    repo: &Repository,
-    ref_name: &str,
-    target: &Oid,
-    path: &str,
-    content: Option<&[u8]>,
-    opts: &MetadataOptions,
-) -> Result<Oid, git2::Error> {
-    repo.metadata_add(ref_name, target, path, content, opts)
+fn remove_path_inner(
+    repo: &gix::Repository,
+    tree: gix::ObjectId,
+    path: &[BString],
+) -> Result<Option<gix::ObjectId>, RemoveError> {
+    todo!()
 }
 
-/// Remove path entries matching `patterns` from a target's metadata tree.
-pub fn remove_paths(
-    repo: &Repository,
-    ref_name: &str,
-    target: &Oid,
-    patterns: &[&str],
-    keep: bool,
-) -> Result<bool, git2::Error> {
-    repo.metadata_remove_paths(ref_name, target, patterns, keep)
-}
-
-/// Copy metadata from one target to another.
-pub fn copy(
-    repo: &Repository,
-    ref_name: &str,
-    from: &Oid,
-    to: &Oid,
-    opts: &MetadataOptions,
-) -> Result<Oid, git2::Error> {
-    repo.metadata_copy(ref_name, from, to, opts)
-}
-
-/// Remove metadata for targets whose objects no longer exist.
-pub fn prune(repo: &Repository, ref_name: &str, dry_run: bool) -> Result<Vec<Oid>, git2::Error> {
-    repo.metadata_prune(ref_name, dry_run)
-}
-
-/// Return the metadata ref name.
-pub fn get_ref(repo: &Repository, ref_name: &str) -> String {
-    repo.metadata_get_ref(ref_name)
-}
-
-/// Create a bidirectional link between two keys.
-pub fn link(
-    repo: &Repository,
-    ref_name: &str,
-    a: &str,
-    b: &str,
-    forward: &str,
-    reverse: &str,
-    meta: Option<&[u8]>,
-) -> Result<Oid, git2::Error> {
-    repo.link(ref_name, a, b, forward, reverse, meta)
-}
-
-/// Remove a bidirectional link between two keys.
-pub fn unlink(
-    repo: &Repository,
-    ref_name: &str,
-    a: &str,
-    b: &str,
-    forward: &str,
-    reverse: &str,
-) -> Result<Oid, git2::Error> {
-    repo.unlink(ref_name, a, b, forward, reverse)
-}
-
-/// List all links for a key, optionally filtered by relation name.
-pub fn linked(
-    repo: &Repository,
-    ref_name: &str,
-    key: &str,
-    relation: Option<&str>,
-) -> Result<Vec<(String, String)>, git2::Error> {
-    repo.linked(ref_name, key, relation)
+fn tree_is_empty(repo: &gix::Repository, tree: gix::ObjectId) -> Result<bool> {
+    todo!()
 }
