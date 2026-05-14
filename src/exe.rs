@@ -121,6 +121,10 @@ impl Executor {
         message: Option<&str>,
         author: Option<gix::actor::SignatureRef<'_>>,
     ) -> Result<gix::ObjectId> {
+        // Only Tree needs validation at this time: a bad blob/link/gitlink oid
+        // is a broken leaf (content reads fail) but a bad tree oid breaks
+        // traversal of the parent immediately, corrupting every path that
+        // passes through it.
         if matches!(kind, EntryKind::Tree) {
             let header = self
                 .inner
@@ -151,35 +155,9 @@ impl Executor {
             .map_err(Into::into)
     }
 
-    /// Copy entries from `src_tree` matching any of `patterns` into
-    /// `target`'s metadata tree, optionally nested under `dest_prefix`.
-    ///
-    /// `src_tree` is walked breadth-first; every non-tree leaf whose path
-    /// matches at least one [glob pattern][gix::glob] is reinserted at
-    /// either `<orig_path>` (when `dest_prefix` is `None`) or
-    /// `<dest_prefix>/<orig_path>`. Entry modes are preserved verbatim.
-    /// All matching entries are folded into one commit on the metadata ref.
-    /// `force` controls overwriting existing entries at the destination.
-    /// See [`upsert`](Self::upsert) for `message` and `author` semantics.
-    #[allow(clippy::too_many_arguments)]
-    pub fn import(
-        &self,
-        target: gix::ObjectId,
-        src_tree: gix::ObjectId,
-        patterns: &[&str],
-        dest_prefix: Option<&str>,
-        force: bool,
-        message: Option<&str>,
-        author: Option<gix::actor::SignatureRef<'_>>,
-    ) -> Result<gix::ObjectId> {
-        todo!()
-    }
-
     /// Remove entries from `target`'s metadata tree by glob pattern.
     ///
-    /// With `keep = false`, entries whose path matches any pattern are
-    /// removed; with `keep = true`, the predicate is inverted (entries that
-    /// match are retained, everything else is removed). When the metadata
+    /// Entries whose path matches any pattern are removed. When the metadata
     /// tree is left empty the fanout leaf is deleted entirely and `None` is
     /// returned; otherwise returns the commit id at the new tip of the
     /// metadata ref. See [`upsert`](Self::upsert) for `message` and
@@ -188,7 +166,6 @@ impl Executor {
         &self,
         target: gix::ObjectId,
         patterns: &[&str],
-        keep: bool,
         message: Option<&str>,
         author: Option<gix::actor::SignatureRef<'_>>,
     ) -> Result<Option<gix::ObjectId>> {
