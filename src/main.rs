@@ -1,16 +1,20 @@
 mod cli;
 
-use clap::Parser;
-use cli::Cli;
-#[allow(unused_imports)]
-use git_metadata::exe;
-use std::path::PathBuf;
+use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
 use std::process;
+
+use anyhow::{Context, Result};
+use clap::Parser;
+use gix::objs::tree::EntryKind;
+
+use cli::{Cli, Command};
+use git_metadata::exe::{Executor, TreeEntry};
 
 fn main() {
     if let Some(dir) = parse_generate_man_flag() {
         if let Err(e) = generate_man_page(dir) {
-            eprintln!("Error: {}", e);
+            eprintln!("Error: {e}");
             process::exit(1);
         }
         return;
@@ -19,34 +23,183 @@ fn main() {
     let cli = Cli::parse();
 
     if let Err(e) = run(&cli) {
-        eprintln!("Error: {}", e);
+        eprintln!("Error: {e}");
         process::exit(1);
     }
 }
 
-fn run(_cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
-    todo!()
+fn run(cli: &Cli) -> Result<()> {
+    let executor = Executor::open(cli.repo.as_deref())?.with_ref(cli.r#ref.clone());
+    let stdout = io::stdout();
+    let mut out = stdout.lock();
+
+    match &cli.command {
+        Command::List => {
+            for m in executor.list_targets()? {
+                writeln!(out, "{} {}", m.id(), m.data())?;
+            }
+        }
+        Command::Show { object } => {
+            let oid = executor.resolve_oid(object)?;
+            for entry in executor.ls_tree(oid)? {
+                print_tree_entry(&mut out, &entry)?;
+            }
+        }
+        Command::Add {
+            path,
+            object,
+            message,
+            file,
+            force,
+            allow_empty,
+            shard_level: _,
+        } => {
+            let oid = executor.resolve_oid(object)?;
+            let content = read_content(message.as_deref(), file.as_deref())?;
+            if content.is_empty() && !allow_empty {
+                anyhow::bail!("refusing to add empty content; pass --allow-empty to override");
+            }
+            let blob_id = executor.repo().write_blob(&content)?.detach();
+            executor.upsert(oid, path, EntryKind::Blob, blob_id, *force, None, None)?;
+        }
+        Command::Remove {
+            patterns,
+            object,
+            keep,
+        } => {
+            let oid = executor.resolve_oid(object)?;
+            let refs: Vec<&str> = patterns.iter().map(String::as_str).collect();
+            if *keep {
+                let to_remove = paths_not_matching(&executor, oid, &refs)?;
+                let remove_refs: Vec<&str> = to_remove.iter().map(String::as_str).collect();
+                executor.remove(oid, &remove_refs, None, None)?;
+            } else {
+                executor.remove(oid, &refs, None, None)?;
+            }
+        }
+        Command::Copy {
+            from,
+            to,
+            force,
+            shard_level: _,
+        } => {
+            let from_oid = executor.resolve_oid(from)?;
+            let to_oid = executor.resolve_oid(to)?;
+            executor.copy(from_oid, to_oid, *force)?;
+        }
+        Command::Prune { dry_run, verbose } => {
+            for oid in executor.prune(*dry_run)? {
+                if *verbose {
+                    writeln!(out, "{oid}")?;
+                }
+            }
+        }
+        Command::GetRef => {
+            writeln!(out, "{}", executor.metadatas_ref())?;
+        }
+        Command::Link { .. } | Command::Unlink { .. } | Command::Linked { .. } => {
+            anyhow::bail!("link commands are not yet implemented");
+        }
+    }
+
+    Ok(())
 }
 
-#[allow(dead_code)]
+fn print_tree_entry(out: &mut dyn Write, entry: &TreeEntry) -> Result<()> {
+    writeln!(
+        out,
+        "{:06o} {} {}\t{}",
+        entry.mode.value(),
+        entry.mode.as_str(),
+        entry.oid,
+        entry.path,
+    )?;
+    Ok(())
+}
+
+fn read_content(message: Option<&str>, file: Option<&Path>) -> Result<Vec<u8>> {
+    if let Some(msg) = message {
+        return Ok(msg.as_bytes().to_vec());
+    }
+    if let Some(path) = file {
+        return std::fs::read(path).with_context(|| format!("reading {path:?}"));
+    }
+    if atty_stdin() {
+        anyhow::bail!("no content provided; pass --message/-m, --file/-F, or pipe to stdin");
+    }
+    let mut buf = Vec::new();
+    io::stdin().read_to_end(&mut buf)?;
+    Ok(buf)
+}
+
+fn paths_not_matching(
+    executor: &Executor,
+    target: gix::ObjectId,
+    patterns: &[&str],
+) -> Result<Vec<String>> {
+    let compiled: Vec<gix::glob::Pattern> = patterns
+        .iter()
+        .map(|p| {
+            gix::glob::parse(p.as_bytes())
+                .ok_or_else(|| anyhow::anyhow!("invalid glob pattern: {p:?}"))
+        })
+        .collect::<Result<_>>()?;
+
+    Ok(executor
+        .ls_tree(target)?
+        .into_iter()
+        .filter(|entry| {
+            !compiled.iter().any(|p| {
+                p.matches(
+                    gix::bstr::BStr::new(entry.path.as_bytes()),
+                    gix::glob::wildmatch::Mode::NO_MATCH_SLASH_LITERAL,
+                )
+            })
+        })
+        .map(|entry| entry.path)
+        .collect())
+}
+
 fn atty_stdin() -> bool {
-    todo!()
+    use std::io::IsTerminal;
+    io::stdin().is_terminal()
 }
 
 fn parse_generate_man_flag() -> Option<PathBuf> {
-    todo!()
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--generate-man-page" {
+            return Some(
+                args.next()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(default_man_dir),
+            );
+        }
+        if let Some(dir) = arg.strip_prefix("--generate-man-page=") {
+            return Some(PathBuf::from(dir));
+        }
+    }
+    None
 }
 
-#[allow(dead_code)]
 fn default_man_dir() -> PathBuf {
-    todo!()
+    PathBuf::from("/usr/local/share/man/man1")
 }
 
-fn generate_man_page(_output_dir: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    todo!()
+fn generate_man_page(output_dir: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    use clap::CommandFactory;
+    let cmd = Cli::command();
+    let man = clap_mangen::Man::new(cmd);
+    let mut buf = Vec::new();
+    man.render(&mut buf)?;
+    let path = output_dir.join("git-metadata.1");
+    std::fs::write(&path, buf)?;
+    Ok(())
 }
 
 #[allow(dead_code)]
-fn manpath_covers(_dir: &std::path::Path) -> bool {
-    todo!()
+fn manpath_covers(dir: &Path) -> bool {
+    std::env::var("MANPATH")
+        .map(|p| p.split(':').any(|seg| Path::new(seg) == dir))
+        .unwrap_or(false)
 }

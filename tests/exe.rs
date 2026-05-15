@@ -297,19 +297,13 @@ fn prune_dry_run_prints_stale_targets_without_removing() {
             .expect("upsert phantom");
     }
 
-    let mut out = Vec::new();
-    let count = exe.prune(true, &mut out).expect("prune dry-run");
-    assert_eq!(count, 2);
+    let mut pruned = exe.prune(true).expect("prune dry-run");
+    assert_eq!(pruned.len(), 2);
 
-    let output = String::from_utf8(out).unwrap();
-    let lines: Vec<&str> = output.lines().collect();
-    assert_eq!(lines.len(), 2, "one line per stale entry: {output:?}");
-
-    let mut printed: Vec<&str> = lines.clone();
-    printed.sort();
-    let mut expected_hex = vec![p1.to_hex().to_string(), p2.to_hex().to_string()];
-    expected_hex.sort();
-    assert_eq!(printed, expected_hex);
+    pruned.sort();
+    let mut expected = vec![p1, p2];
+    expected.sort();
+    assert_eq!(pruned, expected);
 
     // Dry-run must not remove anything.
     let mut still_stale = exe.stale().expect("stale after dry-run");
@@ -333,9 +327,8 @@ fn prune_removes_stale_entries_and_returns_count() {
             .expect("upsert");
     }
 
-    let mut out = Vec::new();
-    let count = exe.prune(false, &mut out).expect("prune");
-    assert_eq!(count, 2);
+    let pruned = exe.prune(false).expect("prune");
+    assert_eq!(pruned.len(), 2);
 
     assert!(
         exe.stale().expect("stale after prune").is_empty(),
