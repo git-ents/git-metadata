@@ -110,12 +110,49 @@ fn rejects(
     }
 }
 
-/// Seed a root whose first fanout segment (the target's `hex[0..2]`) is a blob,
-/// so `insert_leaf` cannot descend into it.
 #[test]
-fn fanout_path_conflict_when_intermediate_is_not_a_tree() {
+fn validate_propagates_invalid_fanout_depth() {
     let (_dir, repo) = init_repo();
-    let data = empty_tree(&repo);
+    let root = write_tree(
+        &repo,
+        vec![(vec![".fanout".into()], EntryKind::Blob, blob(&repo, b"99"))],
+    );
+    set_ref(&repo, root);
+
+    let err = repo
+        .validate_metadata_tree(Some(FANOUT_REF))
+        .expect_err("must error");
+    assert!(
+        matches!(err, Error::InvalidFanoutDepth { .. }),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn validate_propagates_invalid_fanout_type() {
+    let (_dir, repo) = init_repo();
+    let subtree = empty_tree(&repo);
+    let root = write_tree(
+        &repo,
+        vec![(vec![".fanout".into()], EntryKind::Tree, subtree)],
+    );
+    set_ref(&repo, root);
+
+    let err = repo
+        .validate_metadata_tree(Some(FANOUT_REF))
+        .expect_err("must error");
+    assert!(
+        matches!(err, Error::InvalidFanoutType { .. }),
+        "got {err:?}"
+    );
+}
+
+/// Seed a root whose first fanout segment (the target's `hex[0..2]`) is a blob.
+/// `validate_metadata_tree` should detect the corruption; `metadata` itself
+/// does not check structural integrity on the write path.
+#[test]
+fn validate_detects_blob_at_intermediate_segment() {
+    let (_dir, repo) = init_repo();
     let target = blob(&repo, b"target");
     let hex = hex_of(target);
     let head: gix::bstr::BString = hex[0..2].into();
@@ -132,7 +169,7 @@ fn fanout_path_conflict_when_intermediate_is_not_a_tree() {
     set_ref(&repo, root);
 
     let err = repo
-        .metadata(sig(), sig(), None, Some(FANOUT_REF), target, &data, false)
+        .validate_metadata_tree(Some(FANOUT_REF))
         .expect_err("must error");
     assert!(
         matches!(&err, Error::FanoutPathConflict(p) if p == &head),

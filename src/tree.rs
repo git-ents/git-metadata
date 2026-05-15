@@ -19,21 +19,17 @@ pub(crate) fn fanout_path(oid: gix::ObjectId, depth: u8) -> Vec<gix::bstr::BStri
     out
 }
 
-pub(crate) fn decode_entries(
-    repo: &gix::Repository,
-    tree_oid: gix::ObjectId,
-) -> Result<Vec<gix::objs::tree::Entry>, Error> {
-    let tree = repo.find_tree(tree_oid)?;
-    let decoded = tree.decode()?;
-    Ok(decoded
-        .entries
-        .iter()
-        .map(|e| gix::objs::tree::Entry {
-            mode: e.mode,
-            filename: e.filename.into(),
-            oid: e.oid.into(),
-        })
-        .collect())
+/// Join path segments with `/` to produce a relative path for the tree `Editor`.
+fn join_paths(path: &[gix::bstr::BString]) -> gix::bstr::BString {
+    let cap = path.iter().map(|s| s.len()).sum::<usize>() + path.len().saturating_sub(1);
+    let mut out = gix::bstr::BString::from(Vec::with_capacity(cap));
+    for (i, seg) in path.iter().enumerate() {
+        if i > 0 {
+            out.push(b'/');
+        }
+        out.extend_from_slice(seg.as_slice());
+    }
+    out
 }
 
 /// Insert `leaf_oid` at `path` under `tree_oid` with mode `leaf_kind`,
@@ -48,103 +44,41 @@ pub(crate) fn insert_leaf(
     force: bool,
     target: gix::ObjectId,
 ) -> Result<gix::ObjectId, Error> {
-    let mut entries = decode_entries(repo, tree_oid)?;
-    let (head, rest) = path.split_first().expect("non-empty path");
-    let pos = entries.iter().position(|e| e.filename == *head);
-    let tree_mode = gix::objs::tree::EntryKind::Tree.into();
-
-    if rest.is_empty() {
-        let leaf_mode = leaf_kind.into();
-        match pos {
-            Some(i) => {
-                if !force {
-                    return Err(Error::AlreadyExists(target));
-                }
-                entries[i].mode = leaf_mode;
-                entries[i].oid = leaf_oid;
-            }
-            None => entries.push(gix::objs::tree::Entry {
-                mode: leaf_mode,
-                filename: head.clone(),
-                oid: leaf_oid,
-            }),
-        }
-    } else {
-        let sub = match pos {
-            Some(i) if entries[i].mode.is_tree() => entries[i].oid,
-            Some(_) => return Err(Error::FanoutPathConflict(head.clone())),
-            None => repo.write_object(gix::objs::Tree::empty())?.detach(),
-        };
-        let new_sub = insert_leaf(repo, sub, rest, leaf_oid, leaf_kind, force, target)?;
-        match pos {
-            Some(i) => {
-                entries[i].oid = new_sub;
-                entries[i].mode = tree_mode;
-            }
-            None => entries.push(gix::objs::tree::Entry {
-                mode: tree_mode,
-                filename: head.clone(),
-                oid: new_sub,
-            }),
-        }
+    let tree = repo.find_tree(tree_oid)?;
+    if !force && tree.lookup_entry(path.iter().cloned())?.is_some() {
+        return Err(Error::AlreadyExists(target));
     }
-
-    entries.sort();
-    Ok(repo.write_object(&gix::objs::Tree { entries })?.detach())
+    let mut editor = tree.edit().map_err(|e| Error::Gix(Box::new(e)))?;
+    editor
+        .upsert(join_paths(path), leaf_kind, leaf_oid)
+        .map_err(|e| Error::Gix(Box::new(e)))?;
+    editor
+        .write()
+        .map(|id| id.detach())
+        .map_err(|e| Error::Gix(Box::new(e)))
 }
 
 /// Remove the entry at `path` under `tree_oid`, pruning intermediate trees
 /// that become empty as a result. Returns the new root tree oid. Reports
-/// [`Error::NotFound`] if the leaf is absent and [`Error::FanoutPathConflict`]
-/// if a non-tree entry occupies an intermediate path segment along the fanout.
+/// [`Error::NotFound`] if the leaf is absent.
 pub(crate) fn remove_leaf(
     repo: &gix::Repository,
     tree_oid: gix::ObjectId,
     path: &[gix::bstr::BString],
     target: gix::ObjectId,
 ) -> Result<gix::ObjectId, Error> {
-    match remove_leaf_inner(repo, tree_oid, path, target)? {
-        Some(oid) => Ok(oid),
-        None => Ok(repo.write_object(gix::objs::Tree::empty())?.detach()),
+    let tree = repo.find_tree(tree_oid)?;
+    if tree.lookup_entry(path.iter().cloned())?.is_none() {
+        return Err(Error::NotFound(target));
     }
-}
-
-fn remove_leaf_inner(
-    repo: &gix::Repository,
-    tree_oid: gix::ObjectId,
-    path: &[gix::bstr::BString],
-    target: gix::ObjectId,
-) -> Result<Option<gix::ObjectId>, Error> {
-    let mut entries = decode_entries(repo, tree_oid)?;
-    let (head, rest) = path.split_first().expect("non-empty path");
-
-    let pos = entries
-        .iter()
-        .position(|e| e.filename == *head)
-        .ok_or(Error::NotFound(target))?;
-
-    if rest.is_empty() {
-        entries.remove(pos);
-    } else {
-        if !entries[pos].mode.is_tree() {
-            return Err(Error::FanoutPathConflict(head.clone()));
-        }
-        match remove_leaf_inner(repo, entries[pos].oid, rest, target)? {
-            Some(new_sub) => entries[pos].oid = new_sub,
-            None => {
-                entries.remove(pos);
-            }
-        }
-    }
-
-    if entries.is_empty() {
-        return Ok(None);
-    }
-    // TODO investigate if tree construction can be less manual
-    entries.sort();
-    Ok(Some(
-        repo.write_object(&gix::objs::Tree { entries })?.detach(),
-    ))
+    let mut editor = tree.edit().map_err(|e| Error::Gix(Box::new(e)))?;
+    editor
+        .remove(join_paths(path))
+        .map_err(|e| Error::Gix(Box::new(e)))?;
+    editor
+        .write()
+        .map(|id| id.detach())
+        .map_err(|e| Error::Gix(Box::new(e)))
 }
 
 /// Read the fanout depth recorded in the `.fanout` blob at the root of
@@ -180,25 +114,84 @@ pub(crate) fn fanout_from_tree(
 }
 
 /// Ensure a `.fanout` blob at the root of `tree_oid` records `depth`.
+///
+/// - If `.fanout` is absent, writes it and returns the new root oid.
+/// - If `.fanout` already records `depth`, returns `tree_oid` unchanged.
+/// - If `.fanout` records a different depth, returns [`Error::FanoutDepthConflict`].
+/// - If `.fanout` exists but is not a blob, returns [`Error::InvalidFanoutType`].
 pub(crate) fn ensure_fanout_blob(
     repo: &gix::Repository,
     tree_oid: gix::ObjectId,
     depth: u8,
 ) -> Result<gix::ObjectId, Error> {
-    let mut entries = decode_entries(repo, tree_oid)?;
-    let blob = repo.write_blob(depth.to_string().as_bytes())?.detach();
-    let name: gix::bstr::BString = ".fanout".into();
-    match entries.iter().position(|e| e.filename == name) {
-        Some(i) => {
-            entries[i].mode = gix::objs::tree::EntryKind::Blob.into();
-            entries[i].oid = blob;
+    let tree = repo.find_tree(tree_oid)?;
+    if let Some(entry) = tree.find_entry(".fanout") {
+        if !entry.mode().is_blob() {
+            return Err(Error::InvalidFanoutType {
+                kind: entry.mode().as_str().to_string(),
+            });
         }
-        None => entries.push(gix::objs::tree::Entry {
-            mode: gix::objs::tree::EntryKind::Blob.into(),
-            filename: name,
-            oid: blob,
-        }),
+        let blob = repo.find_blob(entry.oid())?;
+        let text = std::str::from_utf8(blob.data.trim_ascii())
+            .ok()
+            .and_then(|s| s.parse::<u8>().ok());
+        if let Some(existing) = text {
+            if existing == depth {
+                return Ok(tree_oid);
+            }
+            return Err(Error::FanoutDepthConflict {
+                existing,
+                requested: depth,
+            });
+        }
     }
-    entries.sort();
-    Ok(repo.write_object(&gix::objs::Tree { entries })?.detach())
+    let blob = repo.write_blob(depth.to_string().as_bytes())?.detach();
+    let mut editor = tree.edit().map_err(|e| Error::Gix(Box::new(e)))?;
+    editor
+        .upsert(".fanout", gix::objs::tree::EntryKind::Blob, blob)
+        .map_err(|e| Error::Gix(Box::new(e)))?;
+    editor
+        .write()
+        .map(|id| id.detach())
+        .map_err(|e| Error::Gix(Box::new(e)))
+}
+
+/// Validate the structural integrity of the fanout tree rooted at `tree_oid`.
+///
+/// Walks all entries at levels `0..depth`. Every entry at an intermediate level
+/// (except `.fanout` at the root) must be a tree; the first non-tree entry
+/// returns [`Error::FanoutPathConflict`].
+pub(crate) fn validate_fanout_tree(
+    repo: &gix::Repository,
+    tree_oid: gix::ObjectId,
+    depth: u8,
+) -> Result<(), Error> {
+    validate_at_level(repo, tree_oid, depth, 0)
+}
+
+/// Recursively validate entries at `level` under `tree_oid`. Every entry at
+/// levels below `total_depth` must be a tree; the `.fanout` blob at level 0
+/// is skipped.
+fn validate_at_level(
+    repo: &gix::Repository,
+    tree_oid: gix::ObjectId,
+    total_depth: u8,
+    level: u8,
+) -> Result<(), Error> {
+    let tree = repo.find_tree(tree_oid)?;
+    let decoded = tree.decode()?;
+    for entry in &decoded.entries {
+        if level == 0 && entry.filename == b".fanout" {
+            continue;
+        }
+        if level < total_depth {
+            if !entry.mode.is_tree() {
+                return Err(Error::FanoutPathConflict(gix::bstr::BString::from(
+                    entry.filename,
+                )));
+            }
+            validate_at_level(repo, entry.oid.to_owned(), total_depth, level + 1)?;
+        }
+    }
+    Ok(())
 }

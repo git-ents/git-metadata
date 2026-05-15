@@ -40,7 +40,7 @@ fn missing_ref_errors() {
 }
 
 #[test]
-fn intermediate_segment_is_blob_yields_conflict() {
+fn intermediate_segment_is_blob_yields_not_found() {
     let (_dir, repo) = init_repo();
     let target = blob(&repo, b"target");
     let hex = hex_of(target);
@@ -51,7 +51,7 @@ fn intermediate_segment_is_blob_yields_conflict() {
         &repo,
         vec![
             (vec![".fanout".into()], EntryKind::Blob, blob(&repo, b"2")),
-            (vec![head.clone()], EntryKind::Blob, squatter),
+            (vec![head], EntryKind::Blob, squatter),
         ],
     );
     set_ref(&repo, root);
@@ -60,7 +60,7 @@ fn intermediate_segment_is_blob_yields_conflict() {
         .metadata_delete(target, Some(FANOUT_REF), sig(), sig(), None)
         .expect_err("must error");
     assert!(
-        matches!(&err, Error::FanoutPathConflict(p) if p == &head),
+        matches!(&err, Error::NotFound(t) if t == &target),
         "got {err:?}"
     );
 }

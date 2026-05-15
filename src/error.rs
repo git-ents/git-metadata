@@ -17,6 +17,8 @@ pub enum Error {
     InvalidRootType(gix::object::Kind),
     #[error("fanout path conflicts with existing non-tree entry {0:?}")]
     FanoutPathConflict(gix::bstr::BString),
+    #[error("fanout depth conflict: tree records depth {existing}, requested {requested}")]
+    FanoutDepthConflict { existing: u8, requested: u8 },
     /// Any underlying `gix` failure that we don't classify domain-specifically.
     /// Downcast via [`std::error::Error::source`] for the original error.
     #[error(transparent)]

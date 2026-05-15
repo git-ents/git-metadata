@@ -54,6 +54,32 @@ proptest! {
         prop_assert_eq!(sorted(got), expected(&repo, &leaves));
     }
 
+    /// `validate_metadata_tree` always returns `Ok` after any sequence of
+    /// `metadata` writes, regardless of fanout depth or number of leaves.
+    #[test]
+    fn validate_is_ok_after_writes((depth, n) in shape()) {
+        let (_dir, repo) = init_repo();
+        let data = empty_tree(&repo);
+
+        if let Some(d) = depth {
+            let seeded = write_fanout(&repo, Some(d), &[]);
+            set_ref(&repo, seeded);
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        for i in 0..n {
+            let id = blob(&repo, format!("blob-{i}").as_bytes());
+            if !seen.insert(id) {
+                continue;
+            }
+            repo.metadata(sig(), sig(), None, Some(FANOUT_REF), id, &data, false)
+                .expect("write");
+        }
+
+        repo.validate_metadata_tree(Some(FANOUT_REF))
+            .expect("validate after writes must pass");
+    }
+
     /// Repeated `force` writes for the same target keep the leaf reachable and
     /// the last data wins.
     #[test]

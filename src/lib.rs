@@ -288,23 +288,25 @@ impl MetadataRepository for gix::Repository {
 
         let depth = self.metadata_ref_fanout(Some(metadatas_ref))?;
         let path = tree::fanout_path(id, depth);
-        let mut tree = self.find_reference(metadatas_ref)?.peel_to_tree()?;
-        let (leaf, segs) = path
-            .split_last()
-            .expect("fanout_path yields depth + 1 segments");
-        for seg in segs {
-            let entry = tree.find_entry(seg.as_slice()).ok_or(Error::NotFound(id))?;
-            if !entry.mode().is_tree() {
-                return Err(Error::FanoutPathConflict(seg.clone()));
-            }
-            tree = self.find_tree(entry.oid())?;
-        }
+        let tree = self.find_reference(metadatas_ref)?.peel_to_tree()?;
         let entry = tree
-            .find_entry(leaf.as_slice())
+            .lookup_entry(path.iter().cloned())?
             .ok_or(Error::NotFound(id))?;
         if !entry.mode().is_tree() {
-            return Err(Error::FanoutPathConflict(leaf.clone()));
+            let kind = match entry.mode().kind() {
+                gix::objs::tree::EntryKind::Commit => gix::object::Kind::Commit,
+                _ => gix::object::Kind::Blob,
+            };
+            return Err(Error::InvalidType(kind));
         }
-        Ok(entry.oid().into())
+        Ok(entry.object_id())
+    }
+
+    fn validate_metadata_tree(&self, metadatas_ref: Option<&str>) -> Result<(), Error> {
+        let metadatas_ref = resolve_ref(self, metadatas_ref)?;
+        let metadatas_ref = metadatas_ref.as_ref();
+        let tree = self.find_reference(metadatas_ref)?.peel_to_tree()?;
+        let depth = tree::fanout_from_tree(self, tree.id)?;
+        tree::validate_fanout_tree(self, tree.id, depth)
     }
 }

@@ -136,6 +136,17 @@ fn none_metadatas_ref_uses_default() {
 }
 
 #[test]
+fn validate_passes_on_well_formed_ref() {
+    let (_dir, repo) = init_repo();
+    let target = blob(&repo, b"target");
+    let data = empty_tree(&repo);
+    repo.metadata(sig(), sig(), None, Some(FANOUT_REF), target, &data, false)
+        .expect("write");
+    repo.validate_metadata_tree(Some(FANOUT_REF))
+        .expect("valid");
+}
+
+#[test]
 fn preserves_existing_leaves_at_other_paths() {
     let (_dir, repo) = init_repo();
     let data = empty_tree(&repo);

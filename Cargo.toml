@@ -23,7 +23,7 @@ cli = ["dep:anyhow", "dep:clap", "dep:clap_mangen"]
 anyhow = { version = "1.0.102", optional = true }
 clap = { version = "4.5.60", features = ["derive"], optional = true }
 clap_mangen = { version = "0.2.31", optional = true }
-gix = "0.83.0"
+gix = { version = "0.83.0", features = ["tree-editor"] }
 thiserror = "2.0.18"
 
 [dev-dependencies]

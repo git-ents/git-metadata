@@ -24,13 +24,13 @@ fn intermediate_segment_is_blob_yields_conflict() {
         .find_metadata(Some(FANOUT_REF), target)
         .expect_err("must error");
     assert!(
-        matches!(&err, Error::FanoutPathConflict(p) if p == &head),
+        matches!(&err, Error::NotFound(t) if t == &target),
         "got {err:?}"
     );
 }
 
 #[test]
-fn leaf_segment_is_blob_yields_conflict() {
+fn leaf_segment_is_blob_yields_invalid_type() {
     let (_dir, repo) = init_repo();
     let target = blob(&repo, b"target");
     let hex = hex_of(target);
@@ -40,17 +40,14 @@ fn leaf_segment_is_blob_yields_conflict() {
     let prefix: gix::bstr::BString = hex[0..2].into();
     let leaf: gix::bstr::BString = hex[2..].into();
     let squatter = blob(&repo, b"leaf-squat");
-    let root = write_tree(
-        &repo,
-        vec![(vec![prefix, leaf.clone()], EntryKind::Blob, squatter)],
-    );
+    let root = write_tree(&repo, vec![(vec![prefix, leaf], EntryKind::Blob, squatter)]);
     set_ref(&repo, root);
 
     let err = repo
         .find_metadata(Some(FANOUT_REF), target)
         .expect_err("must error");
     assert!(
-        matches!(&err, Error::FanoutPathConflict(p) if p == &leaf),
+        matches!(&err, Error::InvalidType(k) if *k == gix::object::Kind::Blob),
         "got {err:?}"
     );
 }

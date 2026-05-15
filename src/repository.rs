@@ -53,9 +53,12 @@ pub trait MetadataRepository {
     /// object database, [`Error::InvalidType`] if `metadata` is not a tree,
     /// [`Error::InvalidRootType`] if the ref points at something other than a
     /// tree or commit, [`Error::AlreadyExists`] if a leaf already exists and
-    /// `force` is `false`, [`Error::FanoutPathConflict`] if the fanout path
-    /// collides with an existing non-tree entry, or [`Error::Gix`] for any
-    /// underlying `gix` failure (including a failed CAS on the ref update).
+    /// `force` is `false`, or [`Error::Gix`] for any underlying `gix` failure
+    /// (including a failed CAS on the ref update). Call
+    /// [`validate_metadata_tree`] first if you need to detect fanout
+    /// corruption before writing.
+    ///
+    /// [`validate_metadata_tree`]: MetadataRepository::validate_metadata_tree
     ///
     /// [`metadata_default_ref`]: MetadataRepository::metadata_default_ref
     /// [`DEFAULT_FANOUT`]: crate::DEFAULT_FANOUT
@@ -170,17 +173,34 @@ pub trait MetadataRepository {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::NotFound`] if no leaf exists for `id`,
-    /// [`Error::FanoutPathConflict`] if a non-tree entry occupies a path
-    /// segment along the fanout, or [`Error::Gix`] for any underlying `gix`
-    /// failure. The leaf entry's mode is checked to be a tree, but the
-    /// referenced object is not fetched to confirm it parses as one; pass
-    /// the returned id to [`Metadata::new`] if you need that invariant.
+    /// Returns [`Error::NotFound`] if no leaf exists for `id`, or
+    /// [`Error::Gix`] for any underlying `gix` failure. Call
+    /// [`validate_metadata_tree`] first if you need to distinguish a missing
+    /// entry from a structurally corrupted fanout.
     ///
     /// [`metadata_default_ref`]: MetadataRepository::metadata_default_ref
+    /// [`validate_metadata_tree`]: MetadataRepository::validate_metadata_tree
     fn find_metadata(
         &self,
         metadatas_ref: Option<&str>,
         id: gix::ObjectId,
     ) -> Result<gix::ObjectId, Error>;
+
+    /// Validates the structural integrity of the fanout tree at `metadatas_ref`.
+    ///
+    /// When `metadatas_ref` is `None`, [`metadata_default_ref`] is used.
+    /// Checks that all entries at intermediate fanout depth levels are tree
+    /// objects. The `.fanout` blob at the root is also validated by
+    /// [`metadata_ref_fanout`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::FanoutPathConflict`] if a non-tree entry occupies an
+    /// intermediate fanout path segment, [`Error::InvalidFanoutType`] or
+    /// [`Error::InvalidFanoutDepth`] if the `.fanout` blob is malformed, or
+    /// [`Error::Gix`] for any underlying `gix` failure.
+    ///
+    /// [`metadata_default_ref`]: MetadataRepository::metadata_default_ref
+    /// [`metadata_ref_fanout`]: MetadataRepository::metadata_ref_fanout
+    fn validate_metadata_tree(&self, metadatas_ref: Option<&str>) -> Result<(), Error>;
 }

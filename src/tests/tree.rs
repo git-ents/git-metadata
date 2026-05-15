@@ -22,7 +22,17 @@ fn empty_tree(repo: &gix::Repository) -> gix::ObjectId {
 }
 
 fn entries(repo: &gix::Repository, tree_oid: gix::ObjectId) -> Vec<Entry> {
-    crate::tree::decode_entries(repo, tree_oid).expect("decode entries")
+    let tree = repo.find_tree(tree_oid).expect("find tree");
+    let decoded = tree.decode().expect("decode tree");
+    decoded
+        .entries
+        .iter()
+        .map(|e| Entry {
+            mode: e.mode,
+            filename: e.filename.into(),
+            oid: e.oid.into(),
+        })
+        .collect()
 }
 
 fn path(segs: &[&str]) -> Vec<BString> {
@@ -156,35 +166,6 @@ fn insert_leaf_existing_with_force_replaces() {
 }
 
 #[test]
-fn insert_leaf_into_non_tree_segment_conflicts() {
-    let (_dir, repo) = repo();
-    let blob = repo.write_blob(b"x").expect("blob").detach();
-    let root = repo
-        .write_object(gix::objs::Tree {
-            entries: vec![Entry {
-                mode: EntryKind::Blob.into(),
-                filename: "ab".into(),
-                oid: blob,
-            }],
-        })
-        .expect("write root")
-        .detach();
-    let leaf = empty_tree(&repo);
-    let target = oid(b"abcdef0123456789abcdef0123456789abcdef01");
-    let err = insert_leaf(
-        &repo,
-        root,
-        &path(&["ab", "cdef0123456789abcdef0123456789abcdef01"]),
-        leaf,
-        EntryKind::Tree,
-        false,
-        target,
-    )
-    .expect_err("conflict");
-    assert!(matches!(err, Error::FanoutPathConflict(s) if s == "ab"));
-}
-
-#[test]
 fn remove_leaf_prunes_empty_intermediate() {
     let (_dir, repo) = repo();
     let leaf = empty_tree(&repo);
@@ -251,7 +232,37 @@ fn remove_leaf_missing_errors_not_found() {
 }
 
 #[test]
-fn remove_leaf_non_tree_segment_conflicts() {
+fn insert_leaf_blob_at_intermediate_is_overwritten() {
+    let (_dir, repo) = repo();
+    let squatter = repo.write_blob(b"squat").expect("blob").detach();
+    let root = repo
+        .write_object(gix::objs::Tree {
+            entries: vec![Entry {
+                mode: EntryKind::Blob.into(),
+                filename: "ab".into(),
+                oid: squatter,
+            }],
+        })
+        .expect("write root")
+        .detach();
+    let leaf = empty_tree(&repo);
+    let target = oid(b"abcdef0123456789abcdef0123456789abcdef01");
+    let p = path(&["ab", "cdef0123456789abcdef0123456789abcdef01"]);
+
+    // Editor converts the blob squatting at the intermediate to a tree.
+    let new_root =
+        insert_leaf(&repo, root, &p, leaf, EntryKind::Tree, false, target).expect("insert");
+
+    let root_entries = entries(&repo, new_root);
+    assert_eq!(root_entries.len(), 1);
+    assert!(root_entries[0].mode.is_tree());
+    let sub = entries(&repo, root_entries[0].oid);
+    assert_eq!(sub.len(), 1);
+    assert_eq!(sub[0].oid, leaf);
+}
+
+#[test]
+fn remove_leaf_missing_when_intermediate_is_non_tree() {
     let (_dir, repo) = repo();
     let blob = repo.write_blob(b"x").expect("blob").detach();
     let root = repo
@@ -271,8 +282,51 @@ fn remove_leaf_non_tree_segment_conflicts() {
         &path(&["ab", "cdef0123456789abcdef0123456789abcdef01"]),
         target,
     )
-    .expect_err("conflict");
+    .expect_err("not found");
+    assert!(matches!(err, Error::NotFound(t) if t == target));
+}
+
+#[test]
+fn validate_clean_tree_passes() {
+    let (_dir, repo) = repo();
+    let leaf = empty_tree(&repo);
+    let target = oid(b"abcdef0123456789abcdef0123456789abcdef01");
+    let root = insert_leaf(
+        &repo,
+        empty_tree(&repo),
+        &path(&["ab", "cdef0123456789abcdef0123456789abcdef01"]),
+        leaf,
+        EntryKind::Tree,
+        false,
+        target,
+    )
+    .expect("insert");
+    validate_fanout_tree(&repo, root, 1).expect("valid");
+}
+
+#[test]
+fn validate_blob_at_intermediate_fails() {
+    let (_dir, repo) = repo();
+    let blob = repo.write_blob(b"x").expect("blob").detach();
+    let root = repo
+        .write_object(gix::objs::Tree {
+            entries: vec![Entry {
+                mode: EntryKind::Blob.into(),
+                filename: "ab".into(),
+                oid: blob,
+            }],
+        })
+        .expect("write root")
+        .detach();
+    let err = validate_fanout_tree(&repo, root, 1).expect_err("conflict");
     assert!(matches!(err, Error::FanoutPathConflict(s) if s == "ab"));
+}
+
+#[test]
+fn validate_fanout_blob_skipped_at_root() {
+    let (_dir, repo) = repo();
+    let root = ensure_fanout_blob(&repo, empty_tree(&repo), 2).expect("fanout");
+    validate_fanout_tree(&repo, root, 2).expect("valid — .fanout blob at root is not an error");
 }
 
 #[test]
@@ -288,14 +342,52 @@ fn ensure_fanout_blob_writes_depth() {
 }
 
 #[test]
-fn ensure_fanout_blob_replaces_existing() {
+fn ensure_fanout_blob_same_depth_is_noop() {
+    let (_dir, repo) = repo();
+    let root = ensure_fanout_blob(&repo, empty_tree(&repo), 3).expect("first");
+    let same = ensure_fanout_blob(&repo, root, 3).expect("noop");
+    assert_eq!(same, root);
+}
+
+#[test]
+fn ensure_fanout_blob_depth_conflict_errors() {
     let (_dir, repo) = repo();
     let root = ensure_fanout_blob(&repo, empty_tree(&repo), 1).expect("first");
-    let new_root = ensure_fanout_blob(&repo, root, 5).expect("replace");
-    let es = entries(&repo, new_root);
-    assert_eq!(es.len(), 1);
-    let blob = repo.find_blob(es[0].oid).expect("blob");
-    assert_eq!(blob.data.as_slice(), b"5");
+    let err = ensure_fanout_blob(&repo, root, 5).expect_err("conflict");
+    assert!(
+        matches!(
+            err,
+            Error::FanoutDepthConflict {
+                existing: 1,
+                requested: 5
+            }
+        ),
+        "got {err:?}"
+    );
+}
+
+#[rstest]
+#[case::tree(EntryKind::Tree)]
+#[case::link(EntryKind::Link)]
+#[case::commit(EntryKind::Commit)]
+fn ensure_fanout_blob_non_blob_fanout_errors(#[case] kind: EntryKind) {
+    let (_dir, repo) = repo();
+    let inner = empty_tree(&repo);
+    let root = repo
+        .write_object(gix::objs::Tree {
+            entries: vec![Entry {
+                mode: kind.into(),
+                filename: ".fanout".into(),
+                oid: inner,
+            }],
+        })
+        .expect("write root")
+        .detach();
+    let err = ensure_fanout_blob(&repo, root, 2).expect_err("must error");
+    assert!(
+        matches!(err, Error::InvalidFanoutType { .. }),
+        "got {err:?}"
+    );
 }
 
 #[rstest]
