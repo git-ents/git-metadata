@@ -238,40 +238,8 @@ impl Executor {
         {
             return Ok(Vec::new());
         }
-        let depth = self.inner.metadata_ref_fanout(Some(&self.metadatas_ref))?;
-        let tree = self
-            .inner
-            .find_reference(&self.metadatas_ref)?
-            .peel_to_tree()?;
-        let hash_hex_len = tree.id.kind().len_in_hex();
-        let prefix_segs = depth as usize;
-        let leaf_seg_len = hash_hex_len - 2 * prefix_segs;
-
         let mut out = Vec::new();
-        let mut hex: Vec<u8> = Vec::with_capacity(hash_hex_len);
-        for entry in tree.traverse().breadthfirst.files()? {
-            if !entry.mode.is_tree() {
-                continue;
-            }
-            hex.clear();
-            let mut segs = 0usize;
-            let mut shape_ok = true;
-            for seg in entry.filepath.split(|b| *b == b'/') {
-                segs += 1;
-                let want = if segs <= prefix_segs { 2 } else { leaf_seg_len };
-                if segs > prefix_segs + 1
-                    || seg.len() != want
-                    || !seg.iter().all(u8::is_ascii_hexdigit)
-                {
-                    shape_ok = false;
-                    break;
-                }
-                hex.extend_from_slice(seg);
-            }
-            if !shape_ok || segs != prefix_segs + 1 {
-                continue;
-            }
-            let id = gix::ObjectId::from_hex(&hex).expect("shape-validated hex");
+        for (id, _data) in crate::raw_entries(&self.inner, &self.metadatas_ref)? {
             if self.inner.try_find_header(id)?.is_none() {
                 out.push(id);
             }

@@ -74,6 +74,49 @@ fn resolve_ref<'a>(
     })
 }
 
+/// Walk the fanout tree at `metadatas_ref` and yield `(target_id, data_id)`
+/// for every leaf whose path matches the expected fanout shape. Does not
+/// verify that the referenced objects exist or have the expected kinds.
+pub(crate) fn raw_entries(
+    repo: &gix::Repository,
+    metadatas_ref: &str,
+) -> Result<Vec<(gix::ObjectId, gix::ObjectId)>, Error> {
+    let depth = repo.metadata_ref_fanout(Some(metadatas_ref))?;
+    let tree = repo.find_reference(metadatas_ref)?.peel_to_tree()?;
+    let hash_hex_len = tree.id.kind().len_in_hex();
+
+    let prefix_segs = depth as usize;
+    let leaf_seg_len = hash_hex_len - 2 * prefix_segs;
+    let entries = tree.traverse().breadthfirst.files()?;
+    let mut out = Vec::new();
+    let mut hex: Vec<u8> = Vec::with_capacity(hash_hex_len);
+
+    for entry in entries {
+        if !entry.mode.is_tree() {
+            continue;
+        }
+        hex.clear();
+        let mut segs = 0usize;
+        let mut shape_ok = true;
+        for seg in entry.filepath.split(|b| *b == b'/') {
+            segs += 1;
+            let want = if segs <= prefix_segs { 2 } else { leaf_seg_len };
+            if segs > prefix_segs + 1 || seg.len() != want || !seg.iter().all(u8::is_ascii_hexdigit)
+            {
+                shape_ok = false;
+                break;
+            }
+            hex.extend_from_slice(seg);
+        }
+        if !shape_ok || segs != prefix_segs + 1 {
+            continue;
+        }
+        let id = gix::ObjectId::from_hex(&hex).expect("shape-validated hex");
+        out.push((id, entry.oid));
+    }
+    Ok(out)
+}
+
 impl MetadataRepository for gix::Repository {
     #[allow(clippy::too_many_arguments)]
     fn metadata(
@@ -238,44 +281,10 @@ impl MetadataRepository for gix::Repository {
 
     fn metadatas(&self, metadatas_ref: Option<&str>) -> Result<Vec<Metadata>, Error> {
         let metadatas_ref = resolve_ref(self, metadatas_ref)?;
-        let metadatas_ref = metadatas_ref.as_ref();
-
-        let depth = self.metadata_ref_fanout(Some(metadatas_ref))?;
-        let tree = self.find_reference(metadatas_ref)?.peel_to_tree()?;
-        let hash_hex_len = tree.id.kind().len_in_hex();
-
-        let prefix_segs = depth as usize;
-        let leaf_seg_len = hash_hex_len - 2 * prefix_segs;
-        let entries = tree.traverse().breadthfirst.files()?;
-        let mut out = Vec::new();
-        let mut hex: Vec<u8> = Vec::with_capacity(hash_hex_len);
-
-        for entry in entries {
-            if !entry.mode.is_tree() {
-                continue;
-            }
-            hex.clear();
-            let mut segs = 0usize;
-            let mut shape_ok = true;
-            for seg in entry.filepath.split(|b| *b == b'/') {
-                segs += 1;
-                let want = if segs <= prefix_segs { 2 } else { leaf_seg_len };
-                if segs > prefix_segs + 1
-                    || seg.len() != want
-                    || !seg.iter().all(u8::is_ascii_hexdigit)
-                {
-                    shape_ok = false;
-                    break;
-                }
-                hex.extend_from_slice(seg);
-            }
-            if !shape_ok || segs != prefix_segs + 1 {
-                continue;
-            }
-            let id = gix::ObjectId::from_hex(&hex).expect("shape-validated hex");
-            out.push(Metadata::new(self, id, entry.oid)?);
-        }
-        Ok(out)
+        raw_entries(self, metadatas_ref.as_ref())?
+            .into_iter()
+            .map(|(id, data)| Metadata::new(self, id, data))
+            .collect()
     }
 
     fn find_metadata(
