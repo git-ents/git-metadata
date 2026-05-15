@@ -169,7 +169,61 @@ impl Executor {
         message: Option<&str>,
         author: Option<gix::actor::SignatureRef<'_>>,
     ) -> Result<Option<gix::ObjectId>> {
-        todo!()
+        let pats = compile_patterns(patterns)?;
+        let subtree_id = self
+            .inner
+            .find_metadata(Some(&self.metadatas_ref), target)?;
+        let subtree = self.inner.find_tree(subtree_id)?;
+
+        let mut matched: Vec<gix::bstr::BString> = Vec::new();
+        for entry in subtree.traverse().breadthfirst.files()? {
+            if pats.iter().any(|p| {
+                p.matches(
+                    gix::bstr::BStr::new(&entry.filepath),
+                    gix::glob::wildmatch::Mode::NO_MATCH_SLASH_LITERAL,
+                )
+            }) {
+                matched.push(entry.filepath.clone());
+            }
+        }
+
+        if matched.is_empty() {
+            return Ok(None);
+        }
+
+        let mut editor = subtree.edit().context("creating tree editor")?;
+        for path in &matched {
+            editor.remove(path.clone()).context("removing entry")?;
+        }
+        let new_subtree_id = editor
+            .write()
+            .map(|id| id.detach())
+            .context("writing subtree")?;
+
+        let committer = self.committer()?;
+        let author = author.unwrap_or(committer);
+
+        if tree_is_empty(&self.inner, new_subtree_id)? {
+            self.inner.metadata_delete(
+                target,
+                Some(&self.metadatas_ref),
+                author,
+                committer,
+                message,
+            )?;
+            return Ok(None);
+        }
+
+        let commit_id = self.inner.metadata(
+            author,
+            committer,
+            message,
+            Some(&self.metadatas_ref),
+            target,
+            &new_subtree_id,
+            true,
+        )?;
+        Ok(Some(commit_id))
     }
 
     /// List targets whose oid no longer exists in the object database.
@@ -177,7 +231,52 @@ impl Executor {
     /// Read-only counterpart to [`prune`](Self::prune): returns the same set
     /// of targets `prune` would drop, without modifying the metadata ref.
     pub fn stale(&self) -> Result<Vec<gix::ObjectId>> {
-        todo!()
+        if self
+            .inner
+            .try_find_reference(&self.metadatas_ref)?
+            .is_none()
+        {
+            return Ok(Vec::new());
+        }
+        let depth = self.inner.metadata_ref_fanout(Some(&self.metadatas_ref))?;
+        let tree = self
+            .inner
+            .find_reference(&self.metadatas_ref)?
+            .peel_to_tree()?;
+        let hash_hex_len = tree.id.kind().len_in_hex();
+        let prefix_segs = depth as usize;
+        let leaf_seg_len = hash_hex_len - 2 * prefix_segs;
+
+        let mut out = Vec::new();
+        let mut hex: Vec<u8> = Vec::with_capacity(hash_hex_len);
+        for entry in tree.traverse().breadthfirst.files()? {
+            if !entry.mode.is_tree() {
+                continue;
+            }
+            hex.clear();
+            let mut segs = 0usize;
+            let mut shape_ok = true;
+            for seg in entry.filepath.split(|b| *b == b'/') {
+                segs += 1;
+                let want = if segs <= prefix_segs { 2 } else { leaf_seg_len };
+                if segs > prefix_segs + 1
+                    || seg.len() != want
+                    || !seg.iter().all(u8::is_ascii_hexdigit)
+                {
+                    shape_ok = false;
+                    break;
+                }
+                hex.extend_from_slice(seg);
+            }
+            if !shape_ok || segs != prefix_segs + 1 {
+                continue;
+            }
+            let id = gix::ObjectId::from_hex(&hex).expect("shape-validated hex");
+            if self.inner.try_find_header(id)?.is_none() {
+                out.push(id);
+            }
+        }
+        Ok(out)
     }
 
     /// Copy `from`'s metadata tree to `to`.
@@ -190,7 +289,19 @@ impl Executor {
         to: gix::ObjectId,
         force: bool,
     ) -> Result<gix::ObjectId> {
-        todo!()
+        let subtree = self.inner.find_metadata(Some(&self.metadatas_ref), from)?;
+        let committer = self.committer()?;
+        self.inner
+            .metadata(
+                committer,
+                committer,
+                None,
+                Some(&self.metadatas_ref),
+                to,
+                &subtree,
+                force,
+            )
+            .map_err(Into::into)
     }
 
     /// Drop entries whose target oid no longer exists in the object database.
@@ -198,7 +309,22 @@ impl Executor {
     /// Returns the number of entries pruned (or that would be pruned, if
     /// `dry_run`). Prints one target oid per line to `out`.
     pub fn prune(&self, dry_run: bool, out: &mut dyn Write) -> Result<usize> {
-        todo!()
+        let stale = self.stale()?;
+        let count = stale.len();
+        let committer = self.committer()?;
+        for id in &stale {
+            writeln!(out, "{id}")?;
+            if !dry_run {
+                self.inner.metadata_delete(
+                    *id,
+                    Some(&self.metadatas_ref),
+                    committer,
+                    committer,
+                    None,
+                )?;
+            }
+        }
+        Ok(count)
     }
 
     /// The underlying `gix` repository handle.
@@ -249,7 +375,13 @@ enum RemoveError {
 }
 
 fn compile_patterns(patterns: &[&str]) -> Result<Vec<gix::glob::Pattern>> {
-    todo!()
+    patterns
+        .iter()
+        .map(|p| {
+            gix::glob::parse(p.as_bytes())
+                .ok_or_else(|| anyhow::anyhow!("invalid glob pattern: {p:?}"))
+        })
+        .collect()
 }
 
 fn split_path(path: &str) -> Result<Vec<BString>> {
@@ -284,18 +416,16 @@ fn remove_path(
     repo: &gix::Repository,
     tree: gix::ObjectId,
     path: &[BString],
+    target: gix::ObjectId,
 ) -> Result<gix::ObjectId, RemoveError> {
-    todo!()
-}
-
-fn remove_path_inner(
-    repo: &gix::Repository,
-    tree: gix::ObjectId,
-    path: &[BString],
-) -> Result<Option<gix::ObjectId>, RemoveError> {
-    todo!()
+    helpers::remove_leaf(repo, tree, path, target).map_err(|e| match e {
+        MetadataError::NotFound(_) => RemoveError::NotFound,
+        other => RemoveError::Other(other.into()),
+    })
 }
 
 fn tree_is_empty(repo: &gix::Repository, tree: gix::ObjectId) -> Result<bool> {
-    todo!()
+    let t = repo.find_tree(tree)?;
+    let decoded = t.decode()?;
+    Ok(decoded.entries.is_empty())
 }
