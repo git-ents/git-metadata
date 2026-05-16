@@ -34,10 +34,24 @@ Just like notes, metadata added to an object does not alter the object's history
 
 Metadata entries are paths (with optional blob content) stored in a Git tree object, associated with any target object (blob, tree, or commit) via a fanout ref.
 The command follows `git notes` semantics: `list`, `show`, `add`, `remove`, `copy`, `prune`, and `get-ref`.
+See the example usage below for inspiration for how this command could be useful.
 
-> [!NOTE]
-> Usage examples will be added when the CLI is refactored.
-> See the warning at the top of this README.
+```bash
+# Attach benchmark results to the current commit.
+git metadata add HEAD --path bench/hyperfine.json --file results.json
+
+# Attach logs that show a bug found on a previously released version.
+git metadata add v0.3.0-rc2 --path incident/$(date +%Y%m%dT%H%M%S).log --file incident.log
+
+# Copy all logs to a newer commit, where the bug is still present.
+git metadata copy v0.3.0-rc2 v0.3.0-rc3
+
+# List all metadata entries on the current commit.
+git metadata list
+
+# Show all metadata entries structured as an in-terminal tree.
+git metadata show
+```
 
 ## Installation
 
