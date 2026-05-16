@@ -19,8 +19,20 @@ pub struct Cli {
     #[arg(long, global = true, default_value = "refs/metadata/commits")]
     pub r#ref: String,
 
+    /// Write the man page and exit. Installs to $XDG_DATA_HOME/man/man1 unless --man-dir is given.
+    #[arg(long)]
+    pub generate_man_page: bool,
+
+    /// Directory to write the man page into. Requires --generate-man-page.
+    #[arg(long, value_name = "DIR", requires = "generate_man_page")]
+    pub man_dir: Option<PathBuf>,
+
+    /// Overwrite existing entries / files without error.
+    #[arg(short, long, global = true)]
+    pub force: bool,
+
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(clap::Subcommand)]
@@ -62,10 +74,6 @@ pub enum Command {
         #[arg(long = "link-ref", conflicts_with_all = ["message", "file", "link"])]
         link_ref: Option<String>,
 
-        /// Overwrite an existing path without error.
-        #[arg(short, long)]
-        force: bool,
-
         /// Allow adding an entry with empty content.
         #[arg(long)]
         allow_empty: bool,
@@ -96,10 +104,6 @@ pub enum Command {
 
         /// The destination object (OID or revision).
         to: String,
-
-        /// Overwrite existing metadata on the destination.
-        #[arg(short, long)]
-        force: bool,
 
         /// Fanout depth (number of 2-hex-char directory segments, max 19).
         #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(0..=19))]

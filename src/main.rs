@@ -11,19 +11,24 @@ use gix::objs::tree::EntryKind;
 use cli::{Cli, Command};
 use git_metadata::exe::{Executor, TreeEntry};
 
-/// CLI entry point. Handles the out-of-band `--generate-man-page` flag
-/// before clap parses, then dispatches to [`run`]. Errors are printed
-/// to stderr and the process exits with status 1.
 fn main() {
-    if let Some(dir) = parse_generate_man_flag() {
-        if let Err(e) = generate_man_page(dir) {
+    let cli = Cli::parse();
+
+    if cli.generate_man_page {
+        let dir = cli.man_dir.clone().unwrap_or_else(default_man_dir);
+        if let Err(e) = generate_man_page(dir, cli.force) {
             eprintln!("Error: {e}");
             process::exit(1);
         }
         return;
     }
 
-    let cli = Cli::parse();
+    if cli.command.is_none() {
+        use clap::CommandFactory;
+        let _ = Cli::command().print_help();
+        eprintln!();
+        process::exit(2);
+    }
 
     if let Err(e) = run(&cli) {
         eprintln!("Error: {e}");
@@ -31,14 +36,12 @@ fn main() {
     }
 }
 
-/// Dispatches a parsed [`Cli`] to the matching [`Executor`] operation
-/// and writes any human-readable output to stdout.
 fn run(cli: &Cli) -> Result<()> {
     let executor = Executor::open(cli.repo.as_deref())?.with_ref(cli.r#ref.clone());
     let stdout = io::stdout();
     let mut out = stdout.lock();
 
-    match &cli.command {
+    match cli.command.as_ref().unwrap() {
         Command::List => {
             for m in executor.list_targets()? {
                 writeln!(out, "{} {}", m.id(), m.data())?;
@@ -57,7 +60,6 @@ fn run(cli: &Cli) -> Result<()> {
             file,
             link,
             link_ref,
-            force,
             allow_empty,
             shard_level: _,
         } => {
@@ -74,13 +76,13 @@ fn run(cli: &Cli) -> Result<()> {
                     gix::object::Kind::Commit => EntryKind::Commit,
                     gix::object::Kind::Tag => unreachable!("peel_tags_to_end removes tags"),
                 };
-                executor.upsert(oid, p, kind, obj.id, *force, None, None)?;
+                executor.upsert(oid, p, kind, obj.id, cli.force, None, None)?;
             } else if let Some(ref_name) = link_ref {
                 let p = path
                     .as_deref()
                     .ok_or_else(|| anyhow::anyhow!("--path/-p is required with --link-ref"))?;
                 let blob_id = executor.repo().write_blob(ref_name.as_bytes())?.detach();
-                executor.upsert(oid, p, EntryKind::Blob, blob_id, *force, None, None)?;
+                executor.upsert(oid, p, EntryKind::Blob, blob_id, cli.force, None, None)?;
             } else {
                 let file_basename: Option<String> = file
                     .as_ref()
@@ -106,7 +108,7 @@ fn run(cli: &Cli) -> Result<()> {
                     anyhow::bail!("refusing to add empty content; pass --allow-empty to override");
                 }
                 let blob_id = executor.repo().write_blob(&content)?.detach();
-                executor.upsert(oid, p, EntryKind::Blob, blob_id, *force, None, None)?;
+                executor.upsert(oid, p, EntryKind::Blob, blob_id, cli.force, None, None)?;
             }
         }
         Command::Remove {
@@ -127,12 +129,11 @@ fn run(cli: &Cli) -> Result<()> {
         Command::Copy {
             from,
             to,
-            force,
             shard_level: _,
         } => {
             let from_oid = executor.resolve_oid(from)?;
             let to_oid = executor.resolve_oid(to)?;
-            executor.copy(from_oid, to_oid, *force)?;
+            executor.copy(from_oid, to_oid, cli.force)?;
         }
         Command::Prune { dry_run, verbose } => {
             for oid in executor.prune(*dry_run)? {
@@ -295,27 +296,6 @@ fn atty_stdin() -> bool {
     io::stdin().is_terminal()
 }
 
-/// Scans `argv` for `--generate-man-page[=DIR]` without going through
-/// clap, so the flag works even when other required CLI arguments are
-/// absent. Returns the chosen output directory, falling back to
-/// [`default_man_dir`] when no value is supplied.
-fn parse_generate_man_flag() -> Option<PathBuf> {
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        if arg == "--generate-man-page" {
-            return Some(
-                args.next()
-                    .map(PathBuf::from)
-                    .unwrap_or_else(default_man_dir),
-            );
-        }
-        if let Some(dir) = arg.strip_prefix("--generate-man-page=") {
-            return Some(PathBuf::from(dir));
-        }
-    }
-    None
-}
-
 /// Resolves the default install location for the generated man page,
 /// using `$XDG_DATA_HOME/man/man1` when set, then `$HOME/.local/share/
 /// man/man1`, and finally the current working directory.
@@ -328,15 +308,24 @@ fn default_man_dir() -> PathBuf {
 }
 
 /// Renders the clap-derived CLI into a `git-metadata.1` roff file
-/// inside `output_dir`. The directory must already exist.
-fn generate_man_page(output_dir: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+/// inside `output_dir`. Refuses to overwrite an existing file unless
+/// `force` is true.
+fn generate_man_page(output_dir: PathBuf, force: bool) -> Result<(), Box<dyn std::error::Error>> {
     use clap::CommandFactory;
+    let path = output_dir.join("git-metadata.1");
+    if path.exists() && !force {
+        return Err(format!(
+            "{} already exists; pass --force to overwrite",
+            path.display()
+        )
+        .into());
+    }
     let cmd = Cli::command();
     let man = clap_mangen::Man::new(cmd);
     let mut buf = Vec::new();
     man.render(&mut buf)?;
-    let path = output_dir.join("git-metadata.1");
     std::fs::write(&path, buf)?;
+    println!("{}", path.display());
     Ok(())
 }
 
