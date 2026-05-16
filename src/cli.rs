@@ -60,7 +60,7 @@ pub enum Command {
         path: Option<String>,
 
         /// The target object (OID or revision). Defaults to HEAD.
-        #[arg(default_value = "HEAD")]
+        #[arg(default_value = "HEAD", last = true)]
         object: String,
 
         /// Content to store in the blob. Reads from stdin when omitted.
@@ -98,7 +98,7 @@ pub enum Command {
         patterns: Vec<String>,
 
         /// The target object (OID or revision). Defaults to HEAD.
-        #[arg(default_value = "HEAD")]
+        #[arg(default_value = "HEAD", last = true)]
         object: String,
 
         /// Invert: keep only entries matching the patterns.

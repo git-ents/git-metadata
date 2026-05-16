@@ -38,10 +38,10 @@ See the example usage below for inspiration for how this command could be useful
 
 ```bash
 # Attach benchmark results to the current commit.
-git metadata add HEAD --path bench/hyperfine.json --file results.json
+git metadata add --path bench/hyperfine.json --file results.json
 
 # Attach logs that show a bug found on a previously released version.
-git metadata add v0.3.0-rc2 --path incident/$(date +%Y%m%dT%H%M%S).log --file incident.log
+git metadata add --path incident/$(date +%Y%m%dT%H%M%S).log --file incident.log v0.3.0-rc2
 
 # Copy all logs to a newer commit, where the bug is still present.
 git metadata copy v0.3.0-rc2 v0.3.0-rc3
