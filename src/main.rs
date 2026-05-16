@@ -50,17 +50,53 @@ fn run(cli: &Cli) -> Result<()> {
             object,
             message,
             file,
+            link,
+            link_ref,
             force,
             allow_empty,
             shard_level: _,
         } => {
             let oid = executor.resolve_oid(object)?;
-            let content = read_content(message.as_deref(), file.as_deref())?;
-            if content.is_empty() && !allow_empty {
-                anyhow::bail!("refusing to add empty content; pass --allow-empty to override");
+            if let Some(rev) = link {
+                let p = path
+                    .as_deref()
+                    .ok_or_else(|| anyhow::anyhow!("--path/-p is required with --link"))?;
+                let link_oid = executor.resolve_oid(rev)?;
+                let obj = executor.repo().find_object(link_oid)?.peel_tags_to_end()?;
+                let kind = match obj.kind {
+                    gix::object::Kind::Blob => EntryKind::Blob,
+                    gix::object::Kind::Tree => EntryKind::Tree,
+                    gix::object::Kind::Commit => EntryKind::Commit,
+                    gix::object::Kind::Tag => unreachable!("peel_tags_to_end removes tags"),
+                };
+                executor.upsert(oid, p, kind, obj.id, *force, None, None)?;
+            } else if let Some(ref_name) = link_ref {
+                let p = path
+                    .as_deref()
+                    .ok_or_else(|| anyhow::anyhow!("--path/-p is required with --link-ref"))?;
+                let blob_id = executor.repo().write_blob(ref_name.as_bytes())?.detach();
+                executor.upsert(oid, p, EntryKind::Blob, blob_id, *force, None, None)?;
+            } else {
+                let file_basename: Option<String> = file
+                    .as_ref()
+                    .and_then(|f| f.file_name())
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string());
+                let p = path
+                    .as_deref()
+                    .or(file_basename.as_deref())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "--path/-p is required unless --file, --link, or --link-ref is given"
+                        )
+                    })?;
+                let content = read_content(message.as_deref(), file.as_deref())?;
+                if content.is_empty() && !allow_empty {
+                    anyhow::bail!("refusing to add empty content; pass --allow-empty to override");
+                }
+                let blob_id = executor.repo().write_blob(&content)?.detach();
+                executor.upsert(oid, p, EntryKind::Blob, blob_id, *force, None, None)?;
             }
-            let blob_id = executor.repo().write_blob(&content)?.detach();
-            executor.upsert(oid, path, EntryKind::Blob, blob_id, *force, None, None)?;
         }
         Command::Remove {
             patterns,
@@ -96,9 +132,6 @@ fn run(cli: &Cli) -> Result<()> {
         }
         Command::GetRef => {
             writeln!(out, "{}", executor.metadatas_ref())?;
-        }
-        Command::Link { .. } | Command::Unlink { .. } | Command::Linked { .. } => {
-            anyhow::bail!("link commands are not yet implemented");
         }
     }
 

@@ -35,22 +35,32 @@ pub enum Command {
         object: String,
     },
 
-    /// Add a path entry to an object's metadata tree.
+    /// Add an entry to an object's metadata tree.
     Add {
-        /// The path to add (e.g. `labels/bug`, `review/status`).
-        path: String,
+        /// Path within the metadata tree (e.g. `labels/bug`).
+        /// Required unless --file is given, in which case it defaults to the file's basename.
+        #[arg(short = 'p', long)]
+        path: Option<String>,
 
         /// The target object (OID or revision). Defaults to HEAD.
         #[arg(default_value = "HEAD")]
         object: String,
 
         /// Content to store in the blob. Reads from stdin when omitted.
-        #[arg(short, long)]
+        #[arg(short, long, conflicts_with_all = ["file", "link", "link_ref"])]
         message: Option<String>,
 
-        /// Read content from a file.
-        #[arg(short = 'F', long, conflicts_with = "message")]
+        /// Read content from a file on disk. Path defaults to the file's basename.
+        #[arg(short = 'F', long, conflicts_with_all = ["message", "link", "link_ref"])]
         file: Option<PathBuf>,
+
+        /// Link an existing Git object (any type) at the path. Resolved to an OID at write time.
+        #[arg(long, conflicts_with_all = ["message", "file", "link_ref"])]
+        link: Option<String>,
+
+        /// Store a ref name as a blob at the path (symbolic pointer, not resolved).
+        #[arg(long = "link-ref", conflicts_with_all = ["message", "file", "link"])]
+        link_ref: Option<String>,
 
         /// Overwrite an existing path without error.
         #[arg(short, long)]
@@ -109,41 +119,4 @@ pub enum Command {
 
     /// Print the metadata ref name.
     GetRef,
-
-    /// Create a bidirectional link between two keys.
-    Link {
-        /// The first key (e.g. `issue:42`).
-        a: String,
-        /// The second key (e.g. `commit:abc123`).
-        b: String,
-        /// The forward relation label.
-        #[arg(long)]
-        forward: String,
-        /// The reverse relation label.
-        #[arg(long)]
-        reverse: String,
-    },
-
-    /// Remove a bidirectional link between two keys.
-    Unlink {
-        /// The first key.
-        a: String,
-        /// The second key.
-        b: String,
-        /// The forward relation label.
-        #[arg(long)]
-        forward: String,
-        /// The reverse relation label.
-        #[arg(long)]
-        reverse: String,
-    },
-
-    /// List links for a key.
-    Linked {
-        /// The key to query.
-        key: String,
-        /// Optional relation filter.
-        #[arg(long)]
-        relation: Option<String>,
-    },
 }
