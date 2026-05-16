@@ -10,8 +10,17 @@ fn missing_leaf_returns_not_found() {
     let other = blob(&repo, b"other");
     let data = empty_tree(&repo);
 
-    repo.metadata(sig(), sig(), None, Some(FANOUT_REF), target, &data, false)
-        .expect("write");
+    repo.metadata(
+        sig(),
+        sig(),
+        None,
+        Some(FANOUT_REF),
+        target,
+        &data,
+        false,
+        None,
+    )
+    .expect("write");
 
     let err = repo
         .metadata_delete(other, Some(FANOUT_REF), sig(), sig(), None)

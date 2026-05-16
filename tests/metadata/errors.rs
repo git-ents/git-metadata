@@ -91,6 +91,7 @@ fn rejects(
             target_oid,
             &meta_oid,
             false,
+            None,
         )
         .expect_err("must error");
 

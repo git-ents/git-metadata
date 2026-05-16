@@ -61,7 +61,8 @@ fn run(cli: &Cli) -> Result<()> {
             link,
             link_ref,
             allow_empty,
-            shard_level: _,
+            shard_level,
+            force,
         } => {
             let oid = executor.resolve_oid(object)?;
             if let Some(rev) = link {
@@ -76,13 +77,22 @@ fn run(cli: &Cli) -> Result<()> {
                     gix::object::Kind::Commit => EntryKind::Commit,
                     gix::object::Kind::Tag => unreachable!("peel_tags_to_end removes tags"),
                 };
-                executor.upsert(oid, p, kind, obj.id, cli.force, None, None)?;
+                executor.upsert(oid, p, kind, obj.id, *force, None, None, *shard_level)?;
             } else if let Some(ref_name) = link_ref {
                 let p = path
                     .as_deref()
                     .ok_or_else(|| anyhow::anyhow!("--path/-p is required with --link-ref"))?;
                 let blob_id = executor.repo().write_blob(ref_name.as_bytes())?.detach();
-                executor.upsert(oid, p, EntryKind::Blob, blob_id, cli.force, None, None)?;
+                executor.upsert(
+                    oid,
+                    p,
+                    EntryKind::Blob,
+                    blob_id,
+                    *force,
+                    None,
+                    None,
+                    *shard_level,
+                )?;
             } else {
                 let file_basename: Option<String> = file
                     .as_ref()
@@ -108,7 +118,16 @@ fn run(cli: &Cli) -> Result<()> {
                     anyhow::bail!("refusing to add empty content; pass --allow-empty to override");
                 }
                 let blob_id = executor.repo().write_blob(&content)?.detach();
-                executor.upsert(oid, p, EntryKind::Blob, blob_id, cli.force, None, None)?;
+                executor.upsert(
+                    oid,
+                    p,
+                    EntryKind::Blob,
+                    blob_id,
+                    *force,
+                    None,
+                    None,
+                    *shard_level,
+                )?;
             }
         }
         Command::Remove {
@@ -126,14 +145,10 @@ fn run(cli: &Cli) -> Result<()> {
                 executor.remove(oid, &refs, None, None)?;
             }
         }
-        Command::Copy {
-            from,
-            to,
-            shard_level: _,
-        } => {
+        Command::Copy { from, to, force } => {
             let from_oid = executor.resolve_oid(from)?;
             let to_oid = executor.resolve_oid(to)?;
-            executor.copy(from_oid, to_oid, cli.force)?;
+            executor.copy(from_oid, to_oid, *force)?;
         }
         Command::Prune { dry_run, verbose } => {
             for oid in executor.prune(*dry_run)? {
@@ -204,9 +219,9 @@ fn read_content(
 fn edit_in_editor(repo: &gix::Repository, object: &str, path: &str) -> Result<Vec<u8>> {
     let edit_path = repo.git_dir().join("METADATA_EDITMSG");
     let template = format!(
-        "\n\
-         # Please enter the metadata content for `{path}` on `{object}`.\n\
-         # Lines starting with '#' will be ignored, and an empty message aborts the entry,\n# if the `--allow-empty` flag was not provided.\n"
+        "# Please enter the metadata content for `{path}` on `{object}`.\n\
+         # Lines starting with '#' will be ignored, and an empty message aborts the entry.\n\
+         # Pass --allow-empty to allow empty content.\n"
     );
     std::fs::write(&edit_path, &template)
         .with_context(|| format!("writing edit template to {edit_path:?}"))?;

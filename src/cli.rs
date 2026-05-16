@@ -16,7 +16,7 @@ pub struct Cli {
     pub repo: Option<PathBuf>,
 
     /// The ref under which metadata is stored.
-    #[arg(long, global = true, default_value = "refs/metadata/commits")]
+    #[arg(long, global = true, default_value = "refs/metadata/objects")]
     pub r#ref: String,
 
     /// Write the man page and exit. Installs to $XDG_DATA_HOME/man/man1 unless --man-dir is given.
@@ -27,8 +27,9 @@ pub struct Cli {
     #[arg(long, value_name = "DIR", requires = "generate_man_page")]
     pub man_dir: Option<PathBuf>,
 
-    /// Overwrite existing entries / files without error.
-    #[arg(short, long, global = true)]
+    /// Overwrite existing entries / files without error. Used with --generate-man-page to
+    /// overwrite an existing file; for subcommands, pass --force after the subcommand name.
+    #[arg(short, long)]
     pub force: bool,
 
     #[command(subcommand)]
@@ -50,7 +51,7 @@ pub enum Command {
     /// Add an entry to an object's metadata tree.
     Add {
         /// Path within the metadata tree (e.g. `labels/bug`).
-        /// Required unless --file is given, in which case it defaults to the file's basename.
+        /// Required unless --file, --link, or --link-ref is given; --file defaults to the file's basename.
         #[arg(short = 'p', long)]
         path: Option<String>,
 
@@ -81,6 +82,10 @@ pub enum Command {
         /// Fanout depth (number of 2-hex-char directory segments, max 19).
         #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(0..=19))]
         shard_level: u8,
+
+        /// Overwrite an existing entry at the same path without error.
+        #[arg(short, long)]
+        force: bool,
     },
 
     /// Remove path entries from an object's metadata tree.
@@ -89,7 +94,7 @@ pub enum Command {
         patterns: Vec<String>,
 
         /// The target object (OID or revision). Defaults to HEAD.
-        #[arg(short, long, default_value = "HEAD")]
+        #[arg(default_value = "HEAD")]
         object: String,
 
         /// Invert: keep only entries matching the patterns.
@@ -98,6 +103,9 @@ pub enum Command {
     },
 
     /// Copy metadata from one object to another.
+    ///
+    /// With --force, replaces the destination's entire metadata tree wholesale;
+    /// any entries on the destination not present in the source are dropped.
     Copy {
         /// The source object (OID or revision).
         from: String,
@@ -105,9 +113,9 @@ pub enum Command {
         /// The destination object (OID or revision).
         to: String,
 
-        /// Fanout depth (number of 2-hex-char directory segments, max 19).
-        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(0..=19))]
-        shard_level: u8,
+        /// Replace the destination's metadata tree; drops entries not in the source.
+        #[arg(short, long)]
+        force: bool,
     },
 
     /// Remove metadata for objects that no longer exist.

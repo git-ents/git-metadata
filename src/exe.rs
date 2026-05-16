@@ -48,7 +48,7 @@ impl Executor {
         self
     }
 
-    /// Configured metadata ref (e.g. `refs/metadata/commits`).
+    /// Configured metadata ref (e.g. `refs/metadata/objects`).
     pub fn metadatas_ref(&self) -> &str {
         &self.metadatas_ref
     }
@@ -64,11 +64,25 @@ impl Executor {
 
     /// Return all targets that have metadata.
     pub fn list_targets(&self) -> Result<Vec<crate::Metadata>> {
+        if self
+            .inner
+            .try_find_reference(&self.metadatas_ref)?
+            .is_none()
+        {
+            return Ok(Vec::new());
+        }
         Ok(self.inner.metadatas(Some(&self.metadatas_ref))?)
     }
 
     /// Return all leaf entries in the metadata tree attached to `target`.
     pub fn ls_tree(&self, target: gix::ObjectId) -> Result<Vec<TreeEntry>> {
+        if self
+            .inner
+            .try_find_reference(&self.metadatas_ref)?
+            .is_none()
+        {
+            return Ok(Vec::new());
+        }
         let tree_id = self
             .inner
             .find_metadata(Some(&self.metadatas_ref), target)?;
@@ -118,6 +132,7 @@ impl Executor {
         force: bool,
         message: Option<&str>,
         author: Option<gix::actor::SignatureRef<'_>>,
+        shard_level: u8,
     ) -> Result<gix::ObjectId> {
         // Only Tree needs validation at this time: a bad blob/link/gitlink oid
         // is a broken leaf (content reads fail) but a bad tree oid breaks
@@ -149,6 +164,7 @@ impl Executor {
                 target,
                 &new_subtree,
                 true,
+                Some(shard_level),
             )
             .map_err(Into::into)
     }
@@ -220,6 +236,7 @@ impl Executor {
             target,
             &new_subtree_id,
             true,
+            None,
         )?;
         Ok(Some(commit_id))
     }
@@ -266,6 +283,7 @@ impl Executor {
                 to,
                 &subtree,
                 force,
+                None,
             )
             .map_err(Into::into)
     }

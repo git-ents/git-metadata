@@ -3,12 +3,12 @@
 use crate::common::*;
 use git_metadata::MetadataRepository;
 
-const DEFAULT_REF: &str = "refs/metadata/commits";
+const DEFAULT_REF: &str = "refs/metadata/objects";
 
 #[test]
 /// If the default ref ever changes, this test failure is the documentation needed
 /// to note the breaking change.
-fn default_ref_is_refs_metadata_commits() {
+fn default_ref_is_refs_metadata_objects() {
     let (_dir, repo) = init_repo();
     assert_eq!(
         repo.metadata_default_ref().expect("default ref"),

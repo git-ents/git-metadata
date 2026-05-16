@@ -9,7 +9,7 @@
 //!
 //! # Model
 //!
-//! Entries live under a Git ref (default `refs/metadata/commits`, see
+//! Entries live under a Git ref (default `refs/metadata/objects`, see
 //! [`MetadataRepository::metadata_default_ref`]). The ref points at a commit
 //! whose tree is the *fanout tree*: a directory tree that maps an annotated
 //! object's hash to a stored metadata tree by splitting the hex id into 2-byte
@@ -38,7 +38,7 @@
 //!     email: "t@example.com".into(),
 //!     time: "0 +0000".into(),
 //! };
-//! repo.metadata(sig, sig, None, None, target, &metadata, false)?;
+//! repo.metadata(sig, sig, None, None, target, &metadata, false, None)?;
 //!
 //! let entries = repo.metadatas(None)?;
 //! assert_eq!(entries.len(), 1);
@@ -128,6 +128,7 @@ impl MetadataRepository for gix::Repository {
         oid: gix::ObjectId,
         metadata: &gix::ObjectId,
         force: bool,
+        initial_depth: Option<u8>,
     ) -> Result<gix::ObjectId, Error> {
         let metadatas_ref = resolve_ref(self, metadatas_ref)?;
         let metadatas_ref = metadatas_ref.as_ref();
@@ -167,7 +168,12 @@ impl MetadataRepository for gix::Repository {
                 }
                 None => {
                     let empty = self.write_object(gix::objs::Tree::empty())?.detach();
-                    (None, Vec::new(), empty, DEFAULT_FANOUT)
+                    (
+                        None,
+                        Vec::new(),
+                        empty,
+                        initial_depth.unwrap_or(DEFAULT_FANOUT),
+                    )
                 }
             };
 
@@ -215,7 +221,7 @@ impl MetadataRepository for gix::Repository {
     /// for future configuration-driven defaults (e.g. a repository config key)
     /// that may surface I/O or parse errors.
     fn metadata_default_ref(&self) -> Result<String, Error> {
-        Ok("refs/metadata/commits".to_string())
+        Ok("refs/metadata/objects".to_string())
     }
 
     fn metadata_ref_fanout(&self, metadatas_ref: Option<&str>) -> Result<u8, Error> {

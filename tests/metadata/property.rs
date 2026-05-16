@@ -37,7 +37,7 @@ proptest! {
                 continue;
             }
             let c = repo
-                .metadata(sig(), sig(), None, Some(FANOUT_REF), id, &data, false)
+                .metadata(sig(), sig(), None, Some(FANOUT_REF), id, &data, false, None)
                 .expect("write");
             if let Some(prev) = last_commit {
                 let commit = repo.find_commit(c).expect("find");
@@ -72,7 +72,7 @@ proptest! {
             if !seen.insert(id) {
                 continue;
             }
-            repo.metadata(sig(), sig(), None, Some(FANOUT_REF), id, &data, false)
+            repo.metadata(sig(), sig(), None, Some(FANOUT_REF), id, &data, false, None)
                 .expect("write");
         }
 
@@ -94,7 +94,7 @@ proptest! {
                 &repo,
                 vec![(vec!["f".into()], EntryKind::Blob, inner)],
             );
-            repo.metadata(sig(), sig(), None, Some(FANOUT_REF), target, &last_data, true)
+            repo.metadata(sig(), sig(), None, Some(FANOUT_REF), target, &last_data, true, None)
                 .expect("force write");
         }
 
