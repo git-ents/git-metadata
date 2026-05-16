@@ -90,7 +90,13 @@ fn run(cli: &Cli) -> Result<()> {
                             "--path/-p is required unless --file, --link, or --link-ref is given"
                         )
                     })?;
-                let content = read_content(message.as_deref(), file.as_deref())?;
+                let content = read_content(
+                    message.as_deref(),
+                    file.as_deref(),
+                    executor.repo(),
+                    object,
+                    p,
+                )?;
                 if content.is_empty() && !allow_empty {
                     anyhow::bail!("refusing to add empty content; pass --allow-empty to override");
                 }
@@ -150,7 +156,13 @@ fn print_tree_entry(out: &mut dyn Write, entry: &TreeEntry) -> Result<()> {
     Ok(())
 }
 
-fn read_content(message: Option<&str>, file: Option<&Path>) -> Result<Vec<u8>> {
+fn read_content(
+    message: Option<&str>,
+    file: Option<&Path>,
+    repo: &gix::Repository,
+    object: &str,
+    path: &str,
+) -> Result<Vec<u8>> {
     if let Some(msg) = message {
         return Ok(msg.as_bytes().to_vec());
     }
@@ -158,11 +170,68 @@ fn read_content(message: Option<&str>, file: Option<&Path>) -> Result<Vec<u8>> {
         return std::fs::read(path).with_context(|| format!("reading {path:?}"));
     }
     if atty_stdin() {
-        anyhow::bail!("no content provided; pass --message/-m, --file/-F, or pipe to stdin");
+        use std::io::IsTerminal;
+        if !io::stderr().is_terminal() {
+            anyhow::bail!(
+                "no content provided and stderr is not a terminal; pass --message/-m, --file/-F, or pipe content to stdin"
+            );
+        }
+        return edit_in_editor(repo, object, path);
     }
     let mut buf = Vec::new();
     io::stdin().read_to_end(&mut buf)?;
     Ok(buf)
+}
+
+fn edit_in_editor(repo: &gix::Repository, object: &str, path: &str) -> Result<Vec<u8>> {
+    let edit_path = repo.git_dir().join("METADATA_EDITMSG");
+    let template = format!(
+        "\n\
+         # Please enter the metadata content for `{path}` on `{object}`.\n\
+         # Lines starting with '#' will be ignored, and an empty message aborts the entry,\n# if the `--allow-empty` flag was not provided.\n"
+    );
+    std::fs::write(&edit_path, &template)
+        .with_context(|| format!("writing edit template to {edit_path:?}"))?;
+
+    if let Some(editor) = git_editor_override(repo) {
+        // SAFETY: single-threaded CLI; no other thread reads the
+        // environment concurrently. Mirrors git's precedence by
+        // making GIT_EDITOR/core.editor visible to `edit`, which
+        // reads VISUAL first.
+        unsafe {
+            std::env::set_var("VISUAL", &editor);
+        }
+    }
+    edit::edit_file(&edit_path).context("launching editor")?;
+
+    let raw = std::fs::read(&edit_path).with_context(|| format!("reading {edit_path:?}"))?;
+    Ok(strip_comments(&raw))
+}
+
+fn git_editor_override(repo: &gix::Repository) -> Option<String> {
+    if let Ok(v) = std::env::var("GIT_EDITOR")
+        && !v.is_empty()
+    {
+        return Some(v);
+    }
+    let snapshot = repo.config_snapshot();
+    if let Some(v) = snapshot.string("core.editor")
+        && !v.is_empty()
+    {
+        return Some(v.to_string());
+    }
+    None
+}
+
+fn strip_comments(buf: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(buf.len());
+    for line in buf.split_inclusive(|&b| b == b'\n') {
+        if line.first().copied() == Some(b'#') {
+            continue;
+        }
+        out.extend_from_slice(line);
+    }
+    out
 }
 
 fn paths_not_matching(
