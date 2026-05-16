@@ -183,7 +183,11 @@ fn parse_generate_man_flag() -> Option<PathBuf> {
 }
 
 fn default_man_dir() -> PathBuf {
-    PathBuf::from("/usr/local/share/man/man1")
+    std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("man/man1")
 }
 
 fn generate_man_page(output_dir: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
