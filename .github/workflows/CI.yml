@@ -111,7 +111,7 @@ jobs:
         with:
           cache: true
       - name: Generate man pages
-        run: cargo run -- --generate-man target/debug/man
+        run: cargo run -- --generate-man-page --man-dir target/debug/man
 
   ci:
     name: CI
