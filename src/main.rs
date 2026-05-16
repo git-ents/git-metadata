@@ -365,6 +365,11 @@ fn build_subtree(label: String, paths: &[&str]) -> termtree::Tree<String> {
 /// `force` is true.
 fn generate_man_page(output_dir: PathBuf, force: bool) -> Result<(), Box<dyn std::error::Error>> {
     use clap::CommandFactory;
+
+    if !output_dir.exists() {
+        std::fs::create_dir_all(&output_dir)?;
+    }
+
     let path = output_dir.join("git-metadata.1");
     if path.exists() && !force {
         return Err(format!(
