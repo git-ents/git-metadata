@@ -26,8 +26,8 @@ pub struct Metadata {
 }
 
 impl Metadata {
-    /// Creates a new [`Metadata`] instance after verifying that `id` references a
-    /// blob and `data` references a tree in the given repository.
+    /// Creates a new [`Metadata`] instance after verifying that `id` exists and
+    /// `data` references a tree in the given repository.
     ///
     /// Checks are performed in argument order; the first failure short-circuits.
     ///
@@ -35,8 +35,8 @@ impl Metadata {
     ///
     /// Returns [`Error::UnsupportedHashKind`] if either `id` or `data` uses a
     /// hash kind other than SHA-1. Returns [`Error::NotFound`] if either object
-    /// does not exist in the repository. Returns [`Error::InvalidType`] if `id`
-    /// is not a blob or `data` is not a tree.
+    /// does not exist in the repository. Returns [`Error::InvalidType`] if
+    /// `data` is not a tree.
     ///
     /// # Examples
     ///
@@ -56,7 +56,7 @@ impl Metadata {
         data: gix::ObjectId,
     ) -> Result<Self, Error> {
         Ok(Self {
-            id: verify(repo, id, gix::object::Kind::Blob)?,
+            id: verify_exists(repo, id)?,
             data: verify(repo, data, gix::object::Kind::Tree)?,
         })
     }
@@ -76,6 +76,17 @@ impl Metadata {
     pub fn data(&self) -> gix::ObjectId {
         self.data
     }
+}
+
+fn verify_exists(repo: &gix::Repository, oid: gix::ObjectId) -> Result<gix::ObjectId, Error> {
+    if !matches!(oid, gix::ObjectId::Sha1(_)) {
+        return Err(Error::UnsupportedHashKind(oid, oid.kind()));
+    }
+    repo.try_find_header(oid)
+        .ok()
+        .flatten()
+        .ok_or(Error::NotFound(oid))?;
+    Ok(oid)
 }
 
 fn verify(

@@ -89,7 +89,7 @@ fn remove_glob_behavior(
     let d = blob(&exe, b"data");
 
     for name in FIXTURE_FILES {
-        exe.upsert(target, name, EntryKind::Blob, d, false, None, None)
+        exe.upsert(target, name, EntryKind::Blob, d, false, None, None, 1)
             .expect("upsert fixture");
     }
 
@@ -108,8 +108,17 @@ fn remove_last_file_deletes_metadata_entry_and_returns_none() {
     let target = blob(&exe, b"target");
     let data = blob(&exe, b"payload");
 
-    exe.upsert(target, "only.txt", EntryKind::Blob, data, false, None, None)
-        .expect("upsert");
+    exe.upsert(
+        target,
+        "only.txt",
+        EntryKind::Blob,
+        data,
+        false,
+        None,
+        None,
+        1,
+    )
+    .expect("upsert");
 
     let result = exe
         .remove(target, &["only.txt"], None, None)
@@ -131,7 +140,7 @@ fn remove_invalid_glob_errors() {
     let exe = exe.with_ref(TEST_REF);
     let target = blob(&exe, b"target");
     let data = blob(&exe, b"payload");
-    exe.upsert(target, "f", EntryKind::Blob, data, false, None, None)
+    exe.upsert(target, "f", EntryKind::Blob, data, false, None, None, 1)
         .expect("upsert");
 
     // The empty byte sequence is not a valid glob in gix.
@@ -162,7 +171,7 @@ fn stale_returns_empty_when_all_targets_exist() {
     let target = blob(&exe, b"real target");
     let data = blob(&exe, b"metadata");
 
-    exe.upsert(target, "f", EntryKind::Blob, data, false, None, None)
+    exe.upsert(target, "f", EntryKind::Blob, data, false, None, None, 1)
         .expect("upsert");
 
     let got = exe.stale().expect("stale");
@@ -180,7 +189,7 @@ fn stale_returns_multiple_phantoms_not_real_targets() {
     let data = blob(&exe, b"meta");
 
     for target in [p1, p2, real] {
-        exe.upsert(target, "f", EntryKind::Blob, data, false, None, None)
+        exe.upsert(target, "f", EntryKind::Blob, data, false, None, None, 1)
             .expect("upsert");
     }
 
@@ -203,8 +212,17 @@ fn copy_creates_metadata_at_destination() {
     let dst = blob(&exe, b"dst");
     let data = blob(&exe, b"payload");
 
-    exe.upsert(src, "readme.md", EntryKind::Blob, data, false, None, None)
-        .expect("upsert src");
+    exe.upsert(
+        src,
+        "readme.md",
+        EntryKind::Blob,
+        data,
+        false,
+        None,
+        None,
+        1,
+    )
+    .expect("upsert src");
     exe.copy(src, dst, false).expect("copy");
 
     assert_eq!(file_paths(&exe, dst), ["readme.md"]);
@@ -218,9 +236,9 @@ fn copy_without_force_errors_when_destination_has_metadata() {
     let dst = blob(&exe, b"dst");
     let data = blob(&exe, b"payload");
 
-    exe.upsert(src, "f", EntryKind::Blob, data, false, None, None)
+    exe.upsert(src, "f", EntryKind::Blob, data, false, None, None, 1)
         .expect("upsert src");
-    exe.upsert(dst, "f", EntryKind::Blob, data, false, None, None)
+    exe.upsert(dst, "f", EntryKind::Blob, data, false, None, None, 1)
         .expect("upsert dst");
 
     let err = exe
@@ -242,7 +260,7 @@ fn copy_from_missing_source_errors_not_found() {
     // Populate the ref so it exists, but `src` has no entry in it.
     let other = blob(&exe, b"other");
     let data = blob(&exe, b"meta");
-    exe.upsert(other, "f", EntryKind::Blob, data, false, None, None)
+    exe.upsert(other, "f", EntryKind::Blob, data, false, None, None, 1)
         .expect("upsert other");
 
     let err = exe
@@ -263,9 +281,9 @@ fn copy_with_force_overwrites_destination() {
     let data_src = blob(&exe, b"src-meta");
     let data_dst = blob(&exe, b"dst-meta");
 
-    exe.upsert(src, "f", EntryKind::Blob, data_src, false, None, None)
+    exe.upsert(src, "f", EntryKind::Blob, data_src, false, None, None, 1)
         .expect("upsert src");
-    exe.upsert(dst, "f", EntryKind::Blob, data_dst, false, None, None)
+    exe.upsert(dst, "f", EntryKind::Blob, data_dst, false, None, None, 1)
         .expect("upsert dst");
     exe.copy(src, dst, true).expect("copy with force");
 
@@ -293,23 +311,17 @@ fn prune_dry_run_prints_stale_targets_without_removing() {
     let data = blob(&exe, b"meta");
 
     for p in [p1, p2] {
-        exe.upsert(p, "f", EntryKind::Blob, data, false, None, None)
+        exe.upsert(p, "f", EntryKind::Blob, data, false, None, None, 1)
             .expect("upsert phantom");
     }
 
-    let mut out = Vec::new();
-    let count = exe.prune(true, &mut out).expect("prune dry-run");
-    assert_eq!(count, 2);
+    let mut pruned = exe.prune(true).expect("prune dry-run");
+    assert_eq!(pruned.len(), 2);
 
-    let output = String::from_utf8(out).unwrap();
-    let lines: Vec<&str> = output.lines().collect();
-    assert_eq!(lines.len(), 2, "one line per stale entry: {output:?}");
-
-    let mut printed: Vec<&str> = lines.clone();
-    printed.sort();
-    let mut expected_hex = vec![p1.to_hex().to_string(), p2.to_hex().to_string()];
-    expected_hex.sort();
-    assert_eq!(printed, expected_hex);
+    pruned.sort();
+    let mut expected = vec![p1, p2];
+    expected.sort();
+    assert_eq!(pruned, expected);
 
     // Dry-run must not remove anything.
     let mut still_stale = exe.stale().expect("stale after dry-run");
@@ -329,13 +341,12 @@ fn prune_removes_stale_entries_and_returns_count() {
     let data = blob(&exe, b"meta");
 
     for target in [p1, p2, real] {
-        exe.upsert(target, "f", EntryKind::Blob, data, false, None, None)
+        exe.upsert(target, "f", EntryKind::Blob, data, false, None, None, 1)
             .expect("upsert");
     }
 
-    let mut out = Vec::new();
-    let count = exe.prune(false, &mut out).expect("prune");
-    assert_eq!(count, 2);
+    let pruned = exe.prune(false).expect("prune");
+    assert_eq!(pruned.len(), 2);
 
     assert!(
         exe.stale().expect("stale after prune").is_empty(),

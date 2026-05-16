@@ -1,14 +1,12 @@
 //! CLI runtime layer: a thin, side-effecting wrapper around the
 //! [`MetadataRepository`] trait suitable for driving from `main`.
 //!
-//! Each [`Executor`] method maps one-to-one onto a CLI subcommand. Output is
-//! written to a caller-supplied [`Write`] so the harness can capture it for
-//! tests; errors bubble up as [`anyhow::Error`] so the CLI can render them
-//! uniformly.
+//! Each [`Executor`] method maps one-to-one onto a CLI subcommand. Methods
+//! return structured data; callers own formatting. Errors bubble up as
+//! [`anyhow::Error`] so the CLI can render them uniformly.
 
 #![allow(dead_code, unused_variables)]
 
-use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -16,6 +14,13 @@ use gix::bstr::BString;
 use gix::objs::tree::{Entry, EntryKind};
 
 use crate::{Error as MetadataError, MetadataRepository, tree as helpers};
+
+/// A single leaf entry from a metadata tree, returned by [`Executor::ls_tree`].
+pub struct TreeEntry {
+    pub mode: gix::objs::tree::EntryMode,
+    pub oid: gix::ObjectId,
+    pub path: String,
+}
 
 /// Handle to an open repository, parameterized over the metadata ref name.
 pub struct Executor {
@@ -43,7 +48,7 @@ impl Executor {
         self
     }
 
-    /// Configured metadata ref (e.g. `refs/metadata/commits`).
+    /// Configured metadata ref (e.g. `refs/metadata/objects`).
     pub fn metadatas_ref(&self) -> &str {
         &self.metadatas_ref
     }
@@ -57,36 +62,43 @@ impl Executor {
         Ok(id.detach())
     }
 
-    /// Print one line per target with metadata, formatted `<target> <tree>`.
-    pub fn list_targets(&self, out: &mut dyn Write) -> Result<()> {
-        let entries = self.inner.metadatas(Some(&self.metadatas_ref))?;
-        for m in entries {
-            writeln!(out, "{} {}", m.id(), m.data())?;
+    /// Return all targets that have metadata.
+    pub fn list_targets(&self) -> Result<Vec<crate::Metadata>> {
+        if self
+            .inner
+            .try_find_reference(&self.metadatas_ref)?
+            .is_none()
+        {
+            return Ok(Vec::new());
         }
-        Ok(())
+        Ok(self.inner.metadatas(Some(&self.metadatas_ref))?)
     }
 
-    /// Print one line per leaf in the metadata tree attached to `target`,
-    /// formatted like `git ls-tree -r`: `<mode> <type> <oid>\t<path>`.
-    pub fn ls_tree(&self, target: gix::ObjectId, out: &mut dyn Write) -> Result<()> {
+    /// Return all leaf entries in the metadata tree attached to `target`.
+    pub fn ls_tree(&self, target: gix::ObjectId) -> Result<Vec<TreeEntry>> {
+        if self
+            .inner
+            .try_find_reference(&self.metadatas_ref)?
+            .is_none()
+        {
+            return Ok(Vec::new());
+        }
         let tree_id = self
             .inner
             .find_metadata(Some(&self.metadatas_ref), target)?;
         let tree = self.inner.find_tree(tree_id)?;
+        let mut out = Vec::new();
         for entry in tree.traverse().breadthfirst.files()? {
             if entry.mode.is_tree() {
                 continue;
             }
-            writeln!(
-                out,
-                "{:06o} {} {}\t{}",
-                entry.mode.value(),
-                entry.mode.as_str(),
-                entry.oid,
-                entry.filepath
-            )?;
+            out.push(TreeEntry {
+                mode: entry.mode,
+                oid: entry.oid,
+                path: entry.filepath.to_string(),
+            });
         }
-        Ok(())
+        Ok(out)
     }
 
     /// Plant `oid` at `path` inside `target`'s metadata tree.
@@ -120,6 +132,7 @@ impl Executor {
         force: bool,
         message: Option<&str>,
         author: Option<gix::actor::SignatureRef<'_>>,
+        shard_level: u8,
     ) -> Result<gix::ObjectId> {
         // Only Tree needs validation at this time: a bad blob/link/gitlink oid
         // is a broken leaf (content reads fail) but a bad tree oid breaks
@@ -151,6 +164,7 @@ impl Executor {
                 target,
                 &new_subtree,
                 true,
+                Some(shard_level),
             )
             .map_err(Into::into)
     }
@@ -222,6 +236,7 @@ impl Executor {
             target,
             &new_subtree_id,
             true,
+            None,
         )?;
         Ok(Some(commit_id))
     }
@@ -268,21 +283,20 @@ impl Executor {
                 to,
                 &subtree,
                 force,
+                None,
             )
             .map_err(Into::into)
     }
 
     /// Drop entries whose target oid no longer exists in the object database.
     ///
-    /// Returns the number of entries pruned (or that would be pruned, if
-    /// `dry_run`). Prints one target oid per line to `out`.
-    pub fn prune(&self, dry_run: bool, out: &mut dyn Write) -> Result<usize> {
+    /// Returns the pruned (or would-be-pruned) oids. When `dry_run` is true
+    /// the metadata ref is not modified.
+    pub fn prune(&self, dry_run: bool) -> Result<Vec<gix::ObjectId>> {
         let stale = self.stale()?;
-        let count = stale.len();
-        let committer = self.committer()?;
-        for id in &stale {
-            writeln!(out, "{id}")?;
-            if !dry_run {
+        if !dry_run {
+            let committer = self.committer()?;
+            for id in &stale {
                 self.inner.metadata_delete(
                     *id,
                     Some(&self.metadatas_ref),
@@ -292,7 +306,7 @@ impl Executor {
                 )?;
             }
         }
-        Ok(count)
+        Ok(stale)
     }
 
     /// The underlying `gix` repository handle.

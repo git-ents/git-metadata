@@ -9,8 +9,17 @@ fn deletes_only_leaf_and_returns_empty_listing() {
     let target = blob(&repo, b"target");
     let data = empty_tree(&repo);
 
-    repo.metadata(sig(), sig(), None, Some(FANOUT_REF), target, &data, false)
-        .expect("write");
+    repo.metadata(
+        sig(),
+        sig(),
+        None,
+        Some(FANOUT_REF),
+        target,
+        &data,
+        false,
+        None,
+    )
+    .expect("write");
     repo.metadata_delete(target, Some(FANOUT_REF), sig(), sig(), None)
         .expect("delete");
 
@@ -33,7 +42,16 @@ fn delete_advances_ref_with_prior_commit_as_parent() {
     let data = empty_tree(&repo);
 
     let c1 = repo
-        .metadata(sig(), sig(), None, Some(FANOUT_REF), target, &data, false)
+        .metadata(
+            sig(),
+            sig(),
+            None,
+            Some(FANOUT_REF),
+            target,
+            &data,
+            false,
+            None,
+        )
         .expect("write");
     repo.metadata_delete(target, Some(FANOUT_REF), sig(), sig(), None)
         .expect("delete");
@@ -57,10 +75,28 @@ fn delete_preserves_sibling_leaves() {
     let keep = blob(&repo, b"keep");
     let drop = blob(&repo, b"drop");
 
-    repo.metadata(sig(), sig(), None, Some(FANOUT_REF), keep, &data, false)
-        .expect("write keep");
-    repo.metadata(sig(), sig(), None, Some(FANOUT_REF), drop, &data, false)
-        .expect("write drop");
+    repo.metadata(
+        sig(),
+        sig(),
+        None,
+        Some(FANOUT_REF),
+        keep,
+        &data,
+        false,
+        None,
+    )
+    .expect("write keep");
+    repo.metadata(
+        sig(),
+        sig(),
+        None,
+        Some(FANOUT_REF),
+        drop,
+        &data,
+        false,
+        None,
+    )
+    .expect("write drop");
     repo.metadata_delete(drop, Some(FANOUT_REF), sig(), sig(), None)
         .expect("delete");
 
@@ -74,8 +110,17 @@ fn delete_preserves_fanout_blob() {
     let target = blob(&repo, b"target");
     let data = empty_tree(&repo);
 
-    repo.metadata(sig(), sig(), None, Some(FANOUT_REF), target, &data, false)
-        .expect("write");
+    repo.metadata(
+        sig(),
+        sig(),
+        None,
+        Some(FANOUT_REF),
+        target,
+        &data,
+        false,
+        None,
+    )
+    .expect("write");
     repo.metadata_delete(target, Some(FANOUT_REF), sig(), sig(), None)
         .expect("delete");
 
@@ -94,7 +139,7 @@ fn none_metadatas_ref_uses_default() {
     let target = blob(&repo, b"target");
     let data = empty_tree(&repo);
 
-    repo.metadata(sig(), sig(), None, None, target, &data, false)
+    repo.metadata(sig(), sig(), None, None, target, &data, false, None)
         .expect("write");
     repo.metadata_delete(target, None, sig(), sig(), None)
         .expect("delete");

@@ -20,8 +20,17 @@ fn writes_leaf_at_configured_depth(#[case] seed: Option<u8>, #[case] want_depth:
     let seeded = write_fanout(&repo, seed, &[]);
     set_ref(&repo, seeded);
 
-    repo.metadata(sig(), sig(), None, Some(FANOUT_REF), target, &data, false)
-        .expect("write");
+    repo.metadata(
+        sig(),
+        sig(),
+        None,
+        Some(FANOUT_REF),
+        target,
+        &data,
+        false,
+        None,
+    )
+    .expect("write");
 
     let depth = repo.metadata_ref_fanout(Some(FANOUT_REF)).expect("depth");
     assert_eq!(depth, want_depth);
@@ -79,12 +88,30 @@ fn force_matrix(#[case] pre: Pre, #[case] force: bool, #[case] outcome: Outcome)
             set_ref(&repo, root);
         }
         Pre::LeafPresent => {
-            repo.metadata(sig(), sig(), None, Some(FANOUT_REF), target, &data, false)
-                .expect("seed leaf");
+            repo.metadata(
+                sig(),
+                sig(),
+                None,
+                Some(FANOUT_REF),
+                target,
+                &data,
+                false,
+                None,
+            )
+            .expect("seed leaf");
         }
     }
 
-    let res = repo.metadata(sig(), sig(), None, Some(FANOUT_REF), target, &data, force);
+    let res = repo.metadata(
+        sig(),
+        sig(),
+        None,
+        Some(FANOUT_REF),
+        target,
+        &data,
+        force,
+        None,
+    );
     match outcome {
         Outcome::Ok => {
             res.expect("must succeed");

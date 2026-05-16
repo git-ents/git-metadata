@@ -72,6 +72,7 @@ pub trait MetadataRepository {
         oid: gix::ObjectId,
         metadata: &gix::ObjectId,
         force: bool,
+        initial_depth: Option<u8>,
     ) -> Result<gix::ObjectId, Error>;
 
     /// Returns the default fanout ref name used when callers pass `None`.
@@ -83,7 +84,7 @@ pub trait MetadataRepository {
     ///
     /// let dir = tempfile::tempdir().expect("tempdir");
     /// let repo = gix::init(dir.path()).expect("init repository");
-    /// assert_eq!(repo.metadata_default_ref()?, "refs/metadata/commits");
+    /// assert_eq!(repo.metadata_default_ref()?, "refs/metadata/objects");
     /// # Ok::<(), git_metadata::Error>(())
     /// ```
     fn metadata_default_ref(&self) -> Result<String, Error>;
@@ -154,7 +155,7 @@ pub trait MetadataRepository {
     /// let dir = tempfile::tempdir().expect("tempdir");
     /// let repo = gix::init(dir.path()).expect("init repository");
     /// let empty = repo.write_object(gix::objs::Tree::empty())?.detach();
-    /// repo.reference("refs/metadata/commits", empty, PreviousValue::Any, "init")?;
+    /// repo.reference("refs/metadata/objects", empty, PreviousValue::Any, "init")?;
     ///
     /// let entries = repo.metadatas(None)?;
     /// assert!(entries.is_empty());

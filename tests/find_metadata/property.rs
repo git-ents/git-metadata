@@ -90,7 +90,7 @@ proptest! {
             if !seen.insert(id) {
                 continue;
             }
-            repo.metadata(sig(), sig(), None, Some(FANOUT_REF), id, &data, false)
+            repo.metadata(sig(), sig(), None, Some(FANOUT_REF), id, &data, false, None)
                 .expect("write");
             written.push(id);
         }
