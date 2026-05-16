@@ -11,6 +11,9 @@ use gix::objs::tree::EntryKind;
 use cli::{Cli, Command};
 use git_metadata::exe::{Executor, TreeEntry};
 
+/// CLI entry point. Handles the out-of-band `--generate-man-page` flag
+/// before clap parses, then dispatches to [`run`]. Errors are printed
+/// to stderr and the process exits with status 1.
 fn main() {
     if let Some(dir) = parse_generate_man_flag() {
         if let Err(e) = generate_man_page(dir) {
@@ -28,6 +31,8 @@ fn main() {
     }
 }
 
+/// Dispatches a parsed [`Cli`] to the matching [`Executor`] operation
+/// and writes any human-readable output to stdout.
 fn run(cli: &Cli) -> Result<()> {
     let executor = Executor::open(cli.repo.as_deref())?.with_ref(cli.r#ref.clone());
     let stdout = io::stdout();
@@ -144,6 +149,8 @@ fn run(cli: &Cli) -> Result<()> {
     Ok(())
 }
 
+/// Writes a single tree entry in `git ls-tree`-compatible format:
+/// `<mode> <kind> <oid>\t<path>`.
 fn print_tree_entry(out: &mut dyn Write, entry: &TreeEntry) -> Result<()> {
     writeln!(
         out,
@@ -156,6 +163,11 @@ fn print_tree_entry(out: &mut dyn Write, entry: &TreeEntry) -> Result<()> {
     Ok(())
 }
 
+/// Resolves the blob content for `add`, in precedence order: an
+/// inline `--message`, then a `--file`, then an interactive editor
+/// (when stdin and stderr are both TTYs), and finally piped stdin.
+/// Errors if stdin is a TTY but stderr is not, since no editor can
+/// usefully run in that case.
 fn read_content(
     message: Option<&str>,
     file: Option<&Path>,
@@ -183,6 +195,11 @@ fn read_content(
     Ok(buf)
 }
 
+/// Writes a `METADATA_EDITMSG` template under the git dir, launches
+/// the resolved editor, and returns the saved content with comment
+/// lines stripped. Honors git's editor precedence by shadowing
+/// `VISUAL` with `GIT_EDITOR`/`core.editor` before delegating to the
+/// [`edit`] crate.
 fn edit_in_editor(repo: &gix::Repository, object: &str, path: &str) -> Result<Vec<u8>> {
     let edit_path = repo.git_dir().join("METADATA_EDITMSG");
     let template = format!(
@@ -208,6 +225,9 @@ fn edit_in_editor(repo: &gix::Repository, object: &str, path: &str) -> Result<Ve
     Ok(strip_comments(&raw))
 }
 
+/// Returns the editor command from `GIT_EDITOR` or `core.editor` (in
+/// that order), or `None` if neither is set. The returned string may
+/// contain shell-quoted arguments (e.g. `code --wait`).
 fn git_editor_override(repo: &gix::Repository) -> Option<String> {
     if let Ok(v) = std::env::var("GIT_EDITOR")
         && !v.is_empty()
@@ -223,6 +243,9 @@ fn git_editor_override(repo: &gix::Repository) -> Option<String> {
     None
 }
 
+/// Drops every line whose first byte is `#`, preserving all other
+/// bytes verbatim (including any trailing newline). Matches the
+/// convention used by `git commit`'s editor template.
 fn strip_comments(buf: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(buf.len());
     for line in buf.split_inclusive(|&b| b == b'\n') {
@@ -234,6 +257,10 @@ fn strip_comments(buf: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Returns every metadata path on `target` that matches none of the
+/// given globs. Used by `remove --keep` to invert the user's pattern
+/// list into a set of paths to delete. Slashes in paths are treated
+/// literally (no recursive `**` semantics).
 fn paths_not_matching(
     executor: &Executor,
     target: gix::ObjectId,
@@ -262,11 +289,16 @@ fn paths_not_matching(
         .collect())
 }
 
+/// Reports whether stdin is connected to a terminal.
 fn atty_stdin() -> bool {
     use std::io::IsTerminal;
     io::stdin().is_terminal()
 }
 
+/// Scans `argv` for `--generate-man-page[=DIR]` without going through
+/// clap, so the flag works even when other required CLI arguments are
+/// absent. Returns the chosen output directory, falling back to
+/// [`default_man_dir`] when no value is supplied.
 fn parse_generate_man_flag() -> Option<PathBuf> {
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -284,6 +316,9 @@ fn parse_generate_man_flag() -> Option<PathBuf> {
     None
 }
 
+/// Resolves the default install location for the generated man page,
+/// using `$XDG_DATA_HOME/man/man1` when set, then `$HOME/.local/share/
+/// man/man1`, and finally the current working directory.
 fn default_man_dir() -> PathBuf {
     std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
@@ -292,6 +327,8 @@ fn default_man_dir() -> PathBuf {
         .join("man/man1")
 }
 
+/// Renders the clap-derived CLI into a `git-metadata.1` roff file
+/// inside `output_dir`. The directory must already exist.
 fn generate_man_page(output_dir: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     use clap::CommandFactory;
     let cmd = Cli::command();
@@ -303,6 +340,9 @@ fn generate_man_page(output_dir: PathBuf) -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
+/// Reports whether the given directory appears as a colon-separated
+/// segment of `$MANPATH`. Reserved for a future post-install hint
+/// when the man page is written outside the user's configured path.
 #[allow(dead_code)]
 fn manpath_covers(dir: &Path) -> bool {
     std::env::var("MANPATH")
