@@ -4,6 +4,8 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
+use std::collections::BTreeMap;
+
 use anyhow::{Context, Result};
 use clap::Parser;
 use gix::objs::tree::EntryKind;
@@ -42,16 +44,20 @@ fn run(cli: &Cli) -> Result<()> {
     let mut out = stdout.lock();
 
     match cli.command.as_ref().unwrap() {
-        Command::List => {
-            for m in executor.list_targets()? {
-                writeln!(out, "{} {}", m.id(), m.data())?;
-            }
-        }
-        Command::Show { object } => {
+        Command::List { object } => {
             let oid = executor.resolve_oid(object)?;
             for entry in executor.ls_tree(oid)? {
                 print_tree_entry(&mut out, &entry)?;
             }
+        }
+        Command::Show { object } => {
+            let oid = executor.resolve_oid(object)?;
+            let entries = executor.ls_tree(oid)?;
+            let tree = termtree::Tree::<String>::from(MetadataTree {
+                label: oid.to_string(),
+                entries,
+            });
+            writeln!(out, "{tree}")?;
         }
         Command::Add {
             path,
@@ -320,6 +326,38 @@ fn default_man_dir() -> PathBuf {
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
         .unwrap_or_else(|| PathBuf::from("."))
         .join("man/man1")
+}
+
+struct MetadataTree {
+    label: String,
+    entries: Vec<TreeEntry>,
+}
+
+impl From<MetadataTree> for termtree::Tree<String> {
+    fn from(mt: MetadataTree) -> Self {
+        let paths: Vec<&str> = mt.entries.iter().map(|e| e.path.as_str()).collect();
+        build_subtree(mt.label, &paths)
+    }
+}
+
+fn build_subtree(label: String, paths: &[&str]) -> termtree::Tree<String> {
+    let mut tree = termtree::Tree::new(label);
+    let mut groups: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for path in paths {
+        if let Some((head, tail)) = path.split_once('/') {
+            groups.entry(head).or_default().push(tail);
+        } else {
+            groups.entry(path).or_default();
+        }
+    }
+    for (key, children) in groups {
+        if children.is_empty() {
+            tree.push(termtree::Tree::new(key.to_owned()));
+        } else {
+            tree.push(build_subtree(key.to_owned(), &children));
+        }
+    }
+    tree
 }
 
 /// Renders the clap-derived CLI into a `git-metadata.1` roff file

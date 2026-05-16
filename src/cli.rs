@@ -38,10 +38,14 @@ pub struct Cli {
 
 #[derive(clap::Subcommand)]
 pub enum Command {
-    /// List all targets that have metadata.
-    List,
+    /// List the metadata tree entries for an object.
+    List {
+        /// The target object (OID or revision). Defaults to HEAD.
+        #[arg(default_value = "HEAD")]
+        object: String,
+    },
 
-    /// Show the metadata tree entries for an object.
+    /// Show the metadata tree for an object as a tree.
     Show {
         /// The target object (OID or revision). Defaults to HEAD.
         #[arg(default_value = "HEAD")]
