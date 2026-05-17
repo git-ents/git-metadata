@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.0](https://github.com/git-ents/git-metadata/compare/git-metadata-v0.3.0...git-metadata-v0.4.0) (2026-05-17)
+
+
+### Features
+
+* Add -a/--all flag to list subcommand ([8fed577](https://github.com/git-ents/git-metadata/commit/8fed577dfcb41f9fbd7c25bac59f17408efb310f))
+* Add `Edit` and `Merge` CLI subcommands ([eb21231](https://github.com/git-ents/git-metadata/commit/eb212313658af7ed761aeb003f98877290c5fb80))
+* Add `Executor::merge` for 3-way merge of metadata refs ([eb21231](https://github.com/git-ents/git-metadata/commit/eb212313658af7ed761aeb003f98877290c5fb80))
+* Add `Executor::read_blob_at` for reading blob entries ([eb21231](https://github.com/git-ents/git-metadata/commit/eb212313658af7ed761aeb003f98877290c5fb80))
+* Add edit and merge subcommands ([eb21231](https://github.com/git-ents/git-metadata/commit/eb212313658af7ed761aeb003f98877290c5fb80))
+
+
+### Bug Fixes
+
+* Make object a keyword argument in add, remove, and edit subcommands ([2b88890](https://github.com/git-ents/git-metadata/commit/2b88890e32ef86f94a77b185ac016ac1f89ff264))
+
 ## [0.3.0-rc.2](https://github.com/git-ents/git-metadata/compare/git-metadata-v0.3.0-rc.1...git-metadata-v0.3.0-rc.2) (2026-05-16)
 
 
