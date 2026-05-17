@@ -1,0 +1,24 @@
+[package]
+name = "git-metadata"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = true
+readme = "README.md"
+description = "Porcelain for adding metadata to any git object without rewriting history."
+documentation = "https://docs.rs/git-metadata"
+
+[[bin]]
+name = "git-metadata"
+path = "src/main.rs"
+
+[dependencies]
+gix-metadata = { version = "0.3.0-rc.2", path = "../gix-metadata" }
+gix = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+clap_mangen = { workspace = true }
+edit = { workspace = true }
+termtree = { workspace = true }

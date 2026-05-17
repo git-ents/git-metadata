@@ -123,7 +123,7 @@ jobs:
         with:
           cache: true
       - name: Generate man pages
-        run: cargo run -- --generate-man-page --man-dir target/debug/man
+        run: cargo run -p git-metadata -- --generate-man-page --man-dir target/debug/man
 
   ci:
     name: CI

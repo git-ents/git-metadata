@@ -501,11 +501,8 @@ dependencies = [
  "clap_mangen",
  "edit",
  "gix",
- "proptest",
- "rstest",
- "tempfile",
+ "gix-metadata",
  "termtree",
- "thiserror",
 ]
 
 [[package]]
@@ -997,6 +994,18 @@ dependencies = [
  "gix-trace",
  "gix-worktree",
  "nonempty",
+ "thiserror",
+]
+
+[[package]]
+name = "gix-metadata"
+version = "0.3.0-rc.2"
+dependencies = [
+ "anyhow",
+ "gix",
+ "proptest",
+ "rstest",
+ "tempfile",
  "thiserror",
 ]
 

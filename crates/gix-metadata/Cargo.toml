@@ -1,0 +1,22 @@
+[package]
+name = "gix-metadata"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = true
+readme = "README.md"
+description = "Attach arbitrary tree-shaped data to any Git object without rewriting history."
+documentation = "https://docs.rs/gix-metadata"
+
+[dependencies]
+gix = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+gix = { workspace = true, features = ["sha256"] }
+proptest = { workspace = true }
+rstest = { workspace = true }
+tempfile = { workspace = true }
