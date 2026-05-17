@@ -10,7 +10,7 @@
   "pull-request-footer": "This release was generated with [Release Please](https://github.com/googleapis/release-please).",
   "packages": {
     ".": {
-      "release-as": "0.3.0-rc.2",
+      "release-as": "0.3.0",
       "prerelease": true
     }
   },
