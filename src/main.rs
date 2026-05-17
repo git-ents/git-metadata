@@ -44,10 +44,28 @@ fn run(cli: &Cli) -> Result<()> {
     let mut out = stdout.lock();
 
     match cli.command.as_ref().unwrap() {
-        Command::List { object } => {
-            let oid = executor.resolve_oid(object)?;
-            for entry in executor.ls_tree(oid)? {
-                print_tree_entry(&mut out, &entry)?;
+        Command::List { object, all } => {
+            if *all {
+                let mut first = true;
+                for meta in executor.list_targets()? {
+                    let entries = executor.ls_tree(meta.id())?;
+                    if entries.is_empty() {
+                        continue;
+                    }
+                    if !first {
+                        writeln!(out)?;
+                    }
+                    first = false;
+                    writeln!(out, "{}:", meta.id())?;
+                    for entry in entries {
+                        print_tree_entry(&mut out, &entry)?;
+                    }
+                }
+            } else {
+                let oid = executor.resolve_oid(object)?;
+                for entry in executor.ls_tree(oid)? {
+                    print_tree_entry(&mut out, &entry)?;
+                }
             }
         }
         Command::Show { object } => {

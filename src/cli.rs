@@ -41,8 +41,12 @@ pub enum Command {
     /// List the metadata tree entries for an object.
     List {
         /// The target object (OID or revision). Defaults to HEAD.
-        #[arg(default_value = "HEAD")]
+        #[arg(default_value = "HEAD", conflicts_with = "all")]
         object: String,
+
+        /// List all metadata entries across every object in the ref.
+        #[arg(short = 'a', long)]
+        all: bool,
     },
 
     /// Show the metadata tree for an object as a tree.
