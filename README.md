@@ -73,3 +73,7 @@ The `git-metadata` library can be added to your Rust project via `cargo add`.
 ```shell
 cargo add git-metadata
 ```
+
+## Code of Conduct
+
+Please refer to the in-source [code of conduct](/CONDUCT.md).
