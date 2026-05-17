@@ -133,6 +133,35 @@ pub enum Command {
         verbose: bool,
     },
 
+    /// Edit a blob entry in an object's metadata tree in $EDITOR.
+    Edit {
+        /// Path within the metadata tree (e.g. `notes/review.md`).
+        #[arg(short = 'p', long)]
+        path: String,
+
+        /// The target object (OID or revision). Defaults to HEAD.
+        #[arg(default_value = "HEAD", last = true)]
+        object: String,
+
+        /// Allow saving empty content.
+        #[arg(long)]
+        allow_empty: bool,
+    },
+
+    /// Merge another metadata ref into the current one.
+    ///
+    /// Performs a 3-way merge of the fanout trees. Fails if any conflict
+    /// arises (entries changed differently on both sides without one being
+    /// a strict ancestor).
+    Merge {
+        /// Source ref or revision to merge from (e.g. `refs/metadata/objects-theirs`).
+        source: String,
+
+        /// Commit message for the resulting merge commit.
+        #[arg(short, long)]
+        message: Option<String>,
+    },
+
     /// Print the metadata ref name.
     GetRef,
 }

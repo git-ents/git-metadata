@@ -163,6 +163,26 @@ fn run(cli: &Cli) -> Result<()> {
                 }
             }
         }
+        Command::Edit {
+            path,
+            object,
+            allow_empty,
+        } => {
+            let oid = executor.resolve_oid(object)?;
+            let existing = executor.read_blob_at(oid, path)?;
+            let edited = edit_blob_in_place(executor.repo(), object, path, &existing)?;
+            if edited == existing {
+                return Ok(());
+            }
+            if edited.is_empty() && !allow_empty {
+                anyhow::bail!("refusing to save empty content; pass --allow-empty to override");
+            }
+            let blob_id = executor.repo().write_blob(&edited)?.detach();
+            executor.upsert(oid, path, EntryKind::Blob, blob_id, true, None, None, 1)?;
+        }
+        Command::Merge { source, message } => {
+            executor.merge(source, message.as_deref())?;
+        }
         Command::GetRef => {
             writeln!(out, "{}", executor.metadatas_ref())?;
         }
@@ -245,6 +265,32 @@ fn edit_in_editor(repo: &gix::Repository, object: &str, path: &str) -> Result<Ve
 
     let raw = std::fs::read(&edit_path).with_context(|| format!("reading {edit_path:?}"))?;
     Ok(strip_comments(&raw))
+}
+
+/// Seeds `METADATA_EDITMSG` with `existing`, launches the editor, and
+/// returns the resulting bytes verbatim. Unlike [`edit_in_editor`], no
+/// comment template is prepended and `#`-prefixed lines are preserved —
+/// the blob may legitimately contain them.
+fn edit_blob_in_place(
+    repo: &gix::Repository,
+    object: &str,
+    path: &str,
+    existing: &[u8],
+) -> Result<Vec<u8>> {
+    let edit_path = repo.git_dir().join("METADATA_EDITMSG");
+    std::fs::write(&edit_path, existing)
+        .with_context(|| format!("writing edit buffer to {edit_path:?}"))?;
+
+    if let Some(editor) = git_editor_override(repo) {
+        // SAFETY: see `edit_in_editor`.
+        unsafe {
+            std::env::set_var("VISUAL", &editor);
+        }
+    }
+    edit::edit_file(&edit_path)
+        .with_context(|| format!("launching editor for {path:?} on {object}"))?;
+
+    std::fs::read(&edit_path).with_context(|| format!("reading {edit_path:?}"))
 }
 
 /// Returns the editor command from `GIT_EDITOR` or `core.editor` (in

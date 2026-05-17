@@ -25,7 +25,7 @@ clap = { version = "4.5.60", features = ["derive"], optional = true }
 clap_mangen = { version = "0.2.31", optional = true }
 edit = { version = "0.1.5", optional = true }
 termtree = { version = "0.4", optional = true }
-gix = { version = "0.83.0", features = ["tree-editor"] }
+gix = { version = "0.83.0", features = ["tree-editor", "merge"] }
 thiserror = "2.0.18"
 
 [dev-dependencies]

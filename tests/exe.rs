@@ -1,4 +1,5 @@
-//! Integration tests for `Executor` methods: `remove`, `stale`, `copy`, and `prune`.
+//! Integration tests for `Executor` methods: `remove`, `stale`, `copy`,
+//! `prune`, `read_blob_at`, and `merge`.
 
 use git_metadata::exe::Executor;
 use git_metadata::{Error, MetadataRepository};
@@ -355,4 +356,314 @@ fn prune_removes_stale_entries_and_returns_count() {
     exe.repo()
         .find_metadata(Some(TEST_REF), real)
         .expect("real target metadata should survive prune");
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// read_blob_at
+// ──────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn read_blob_at_returns_content() {
+    let (_dir, exe) = init_executor();
+    let exe = exe.with_ref(TEST_REF);
+    let target = blob(&exe, b"target");
+    let data = blob(&exe, b"hello world");
+    exe.upsert(
+        target,
+        "note.md",
+        EntryKind::Blob,
+        data,
+        false,
+        None,
+        None,
+        1,
+    )
+    .expect("upsert");
+
+    let got = exe.read_blob_at(target, "note.md").expect("read");
+    assert_eq!(got, b"hello world");
+}
+
+#[test]
+fn read_blob_at_errors_when_path_absent() {
+    let (_dir, exe) = init_executor();
+    let exe = exe.with_ref(TEST_REF);
+    let target = blob(&exe, b"target");
+    let data = blob(&exe, b"x");
+    exe.upsert(
+        target,
+        "present",
+        EntryKind::Blob,
+        data,
+        false,
+        None,
+        None,
+        1,
+    )
+    .expect("upsert");
+
+    let err = exe
+        .read_blob_at(target, "missing")
+        .expect_err("should error");
+    assert!(format!("{err}").contains("no entry"), "got: {err}");
+}
+
+#[test]
+fn read_blob_at_errors_when_target_has_no_metadata() {
+    let (_dir, exe) = init_executor();
+    let exe = exe.with_ref(TEST_REF);
+    let other = blob(&exe, b"other");
+    let data = blob(&exe, b"d");
+    exe.upsert(other, "f", EntryKind::Blob, data, false, None, None, 1)
+        .expect("upsert other");
+
+    let target = blob(&exe, b"target");
+    let err = exe.read_blob_at(target, "p").expect_err("should error");
+    assert!(
+        matches!(err.downcast_ref::<Error>(), Some(Error::NotFound(_))),
+        "expected NotFound, got {err:?}"
+    );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// merge
+// ──────────────────────────────────────────────────────────────────────────────
+
+const SIDE_REF: &str = "refs/metadatas/side";
+
+fn tip(exe: &Executor, name: &str) -> gix::ObjectId {
+    exe.repo()
+        .find_reference(name)
+        .expect("find ref")
+        .peel_to_id()
+        .expect("peel")
+        .detach()
+}
+
+fn point_ref_at(exe: &Executor, name: &str, oid: gix::ObjectId) {
+    exe.repo()
+        .reference(
+            name,
+            oid,
+            gix::refs::transaction::PreviousValue::Any,
+            "test",
+        )
+        .expect("set ref");
+}
+
+#[test]
+fn merge_creates_ref_when_dest_absent() {
+    let (_dir, exe) = init_executor();
+    let exe_side = Executor::open(Some(exe.repo().path().parent().unwrap()))
+        .expect("open")
+        .with_ref(SIDE_REF);
+    let target = blob(&exe_side, b"t");
+    let data = blob(&exe_side, b"d");
+    exe_side
+        .upsert(target, "f", EntryKind::Blob, data, false, None, None, 1)
+        .expect("upsert side");
+    let source_tip = tip(&exe_side, SIDE_REF);
+
+    let exe = exe.with_ref(TEST_REF);
+    let new_tip = exe.merge(SIDE_REF, None).expect("merge");
+    assert_eq!(new_tip, source_tip);
+    assert_eq!(tip(&exe, TEST_REF), source_tip);
+}
+
+#[test]
+fn merge_same_tip_is_noop() {
+    let (_dir, exe) = init_executor();
+    let exe = exe.with_ref(TEST_REF);
+    let target = blob(&exe, b"t");
+    let data = blob(&exe, b"d");
+    exe.upsert(target, "f", EntryKind::Blob, data, false, None, None, 1)
+        .expect("upsert");
+    let dest_tip = tip(&exe, TEST_REF);
+    point_ref_at(&exe, SIDE_REF, dest_tip);
+
+    let new_tip = exe.merge(SIDE_REF, None).expect("merge");
+    assert_eq!(new_tip, dest_tip);
+}
+
+#[test]
+fn merge_fast_forward_when_base_equals_dest() {
+    let (_dir, exe) = init_executor();
+    let exe = exe.with_ref(TEST_REF);
+    let target = blob(&exe, b"t");
+    let data = blob(&exe, b"d");
+    exe.upsert(target, "f", EntryKind::Blob, data, false, None, None, 1)
+        .expect("upsert base");
+    let base = tip(&exe, TEST_REF);
+    point_ref_at(&exe, SIDE_REF, base);
+
+    // Advance SIDE_REF past base by upserting through a side executor.
+    let exe_side = Executor::open(Some(exe.repo().path().parent().unwrap()))
+        .expect("open")
+        .with_ref(SIDE_REF);
+    let data2 = blob(&exe_side, b"d2");
+    exe_side
+        .upsert(target, "g", EntryKind::Blob, data2, false, None, None, 1)
+        .expect("upsert side");
+    let side_tip = tip(&exe_side, SIDE_REF);
+    assert_ne!(side_tip, base);
+
+    let new_tip = exe.merge(SIDE_REF, None).expect("merge");
+    assert_eq!(new_tip, side_tip);
+    assert_eq!(tip(&exe, TEST_REF), side_tip);
+}
+
+#[test]
+fn merge_already_up_to_date_when_source_is_ancestor() {
+    let (_dir, exe) = init_executor();
+    let exe = exe.with_ref(TEST_REF);
+    let target = blob(&exe, b"t");
+    let data = blob(&exe, b"d");
+    exe.upsert(target, "f", EntryKind::Blob, data, false, None, None, 1)
+        .expect("upsert base");
+    let base = tip(&exe, TEST_REF);
+    point_ref_at(&exe, SIDE_REF, base);
+
+    let data2 = blob(&exe, b"d2");
+    exe.upsert(target, "g", EntryKind::Blob, data2, false, None, None, 1)
+        .expect("upsert dest");
+    let dest_tip = tip(&exe, TEST_REF);
+
+    let new_tip = exe.merge(SIDE_REF, None).expect("merge");
+    assert_eq!(new_tip, dest_tip);
+    assert_eq!(tip(&exe, TEST_REF), dest_tip);
+}
+
+#[test]
+fn merge_three_way_disjoint_paths_succeeds() {
+    let (_dir, exe) = init_executor();
+    let exe = exe.with_ref(TEST_REF);
+    let target = blob(&exe, b"t");
+    let base_data = blob(&exe, b"base");
+    exe.upsert(
+        target,
+        "base.txt",
+        EntryKind::Blob,
+        base_data,
+        false,
+        None,
+        None,
+        1,
+    )
+    .expect("upsert base");
+    let base = tip(&exe, TEST_REF);
+    point_ref_at(&exe, SIDE_REF, base);
+
+    let exe_side = Executor::open(Some(exe.repo().path().parent().unwrap()))
+        .expect("open")
+        .with_ref(SIDE_REF);
+    let theirs_data = blob(&exe_side, b"theirs");
+    exe_side
+        .upsert(
+            target,
+            "theirs.txt",
+            EntryKind::Blob,
+            theirs_data,
+            false,
+            None,
+            None,
+            1,
+        )
+        .expect("upsert theirs");
+
+    let ours_data = blob(&exe, b"ours");
+    exe.upsert(
+        target,
+        "ours.txt",
+        EntryKind::Blob,
+        ours_data,
+        false,
+        None,
+        None,
+        1,
+    )
+    .expect("upsert ours");
+    let dest_tip = tip(&exe, TEST_REF);
+
+    let new_tip = exe.merge(SIDE_REF, None).expect("merge");
+    assert_ne!(new_tip, dest_tip, "should produce a merge commit");
+    let mut paths = file_paths(&exe, target);
+    paths.retain(|p| !p.ends_with(".fanout"));
+    assert_eq!(paths, ["base.txt", "ours.txt", "theirs.txt"]);
+}
+
+#[test]
+fn merge_conflict_aborts() {
+    let (_dir, exe) = init_executor();
+    let exe = exe.with_ref(TEST_REF);
+    let target = blob(&exe, b"t");
+    let base_data = blob(&exe, b"base\n");
+    exe.upsert(
+        target,
+        "conflict.txt",
+        EntryKind::Blob,
+        base_data,
+        false,
+        None,
+        None,
+        1,
+    )
+    .expect("upsert base");
+    let base = tip(&exe, TEST_REF);
+    point_ref_at(&exe, SIDE_REF, base);
+
+    let exe_side = Executor::open(Some(exe.repo().path().parent().unwrap()))
+        .expect("open")
+        .with_ref(SIDE_REF);
+    let theirs_data = blob(&exe_side, b"theirs\n");
+    exe_side
+        .upsert(
+            target,
+            "conflict.txt",
+            EntryKind::Blob,
+            theirs_data,
+            true,
+            None,
+            None,
+            1,
+        )
+        .expect("upsert theirs");
+
+    let ours_data = blob(&exe, b"ours\n");
+    exe.upsert(
+        target,
+        "conflict.txt",
+        EntryKind::Blob,
+        ours_data,
+        true,
+        None,
+        None,
+        1,
+    )
+    .expect("upsert ours");
+    let dest_tip_before = tip(&exe, TEST_REF);
+
+    let err = exe.merge(SIDE_REF, None).expect_err("should conflict");
+    assert!(
+        format!("{err}").contains("conflict"),
+        "expected conflict error, got: {err}"
+    );
+    assert_eq!(
+        tip(&exe, TEST_REF),
+        dest_tip_before,
+        "dest ref must be unchanged on conflict",
+    );
+}
+
+#[test]
+fn merge_source_not_a_commit_errors() {
+    let (_dir, exe) = init_executor();
+    let exe = exe.with_ref(TEST_REF);
+    let target = blob(&exe, b"t");
+    let data = blob(&exe, b"d");
+    exe.upsert(target, "f", EntryKind::Blob, data, false, None, None, 1)
+        .expect("upsert");
+
+    let bad = data.to_string();
+    let err = exe.merge(&bad, None).expect_err("should error");
+    assert!(format!("{err}").contains("expected a commit"), "got: {err}");
 }

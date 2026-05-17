@@ -309,6 +309,151 @@ impl Executor {
         Ok(stale)
     }
 
+    /// Read the blob content at `path` under `target`'s metadata tree.
+    ///
+    /// Errors if no metadata tree exists for `target`, if `path` is absent,
+    /// or if the entry at `path` is not a blob.
+    pub fn read_blob_at(&self, target: gix::ObjectId, path: &str) -> Result<Vec<u8>> {
+        let tree_id = self
+            .inner
+            .find_metadata(Some(&self.metadatas_ref), target)?;
+        let tree = self.inner.find_tree(tree_id)?;
+        let segs = split_path(path)?;
+        let entry = tree
+            .lookup_entry(segs.iter().cloned())?
+            .ok_or_else(|| anyhow::anyhow!("no entry at {path:?} for {target}"))?;
+        if !entry.mode().is_blob() {
+            anyhow::bail!(
+                "entry at {path:?} is not a blob (mode {})",
+                entry.mode().as_str()
+            );
+        }
+        let blob = self.inner.find_blob(entry.object_id())?;
+        Ok(blob.data.clone())
+    }
+
+    /// Merge `source_rev`'s metadata commit into the current metadata ref.
+    ///
+    /// Delegates to [`gix::Repository::merge_trees`] for 3-way merging.
+    /// Aborts (returns an error listing the conflicting paths) if any
+    /// unresolved conflict remains. Returns the new tip of the metadata
+    /// ref on success; the returned id equals the prior tip when the
+    /// merge was a no-op (already up to date).
+    pub fn merge(&self, source_rev: &str, message: Option<&str>) -> Result<gix::ObjectId> {
+        let source_id = self
+            .inner
+            .rev_parse_single(source_rev)
+            .with_context(|| format!("resolving source `{source_rev}`"))?
+            .detach();
+        let source_header = self
+            .inner
+            .try_find_header(source_id)?
+            .ok_or_else(|| anyhow::anyhow!("source object {source_id} not found"))?;
+        if source_header.kind() != gix::object::Kind::Commit {
+            anyhow::bail!(
+                "source `{source_rev}` resolves to a {:?}; expected a commit",
+                source_header.kind()
+            );
+        }
+
+        let dest_ref = self.metadatas_ref.clone();
+        let dest_id_opt = match self.inner.try_find_reference(&dest_ref)? {
+            Some(mut r) => Some(r.peel_to_id()?.detach()),
+            None => None,
+        };
+
+        let Some(dest_id) = dest_id_opt else {
+            self.inner.reference(
+                dest_ref.as_str(),
+                source_id,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                message.unwrap_or("metadata: merge"),
+            )?;
+            return Ok(source_id);
+        };
+
+        if dest_id == source_id {
+            return Ok(dest_id);
+        }
+
+        let base_id = self
+            .inner
+            .merge_base(dest_id, source_id)
+            .with_context(|| format!("finding merge base of {dest_id} and {source_id}"))?
+            .detach();
+
+        if base_id == source_id {
+            return Ok(dest_id);
+        }
+        if base_id == dest_id {
+            self.inner.reference(
+                dest_ref.as_str(),
+                source_id,
+                gix::refs::transaction::PreviousValue::ExistingMustMatch(
+                    gix::refs::Target::Object(dest_id),
+                ),
+                message.unwrap_or("metadata: fast-forward"),
+            )?;
+            return Ok(source_id);
+        }
+
+        let base_tree = self.inner.find_commit(base_id)?.tree_id()?.detach();
+        let ours_tree = self.inner.find_commit(dest_id)?.tree_id()?.detach();
+        let theirs_tree = self.inner.find_commit(source_id)?.tree_id()?.detach();
+
+        let options = self
+            .inner
+            .tree_merge_options()
+            .context("loading tree merge options")?;
+        let labels = gix::merge::blob::builtin_driver::text::Labels {
+            ancestor: Some("base".into()),
+            current: Some("ours".into()),
+            other: Some("theirs".into()),
+        };
+        let mut outcome = self
+            .inner
+            .merge_trees(base_tree, ours_tree, theirs_tree, labels, options)
+            .context("merging metadata trees")?;
+
+        let unresolved = gix::merge::tree::TreatAsUnresolved::default();
+        if outcome.has_unresolved_conflicts(unresolved) {
+            let paths: Vec<String> = outcome
+                .conflicts
+                .iter()
+                .filter(|c| c.is_unresolved(unresolved))
+                .map(|c| c.ours.location().to_string())
+                .collect();
+            anyhow::bail!("merge conflict at: {}", paths.join(", "));
+        }
+
+        let merged_tree = outcome
+            .tree
+            .write()
+            .context("writing merged tree")?
+            .detach();
+
+        let committer = self.committer()?;
+        let commit = gix::objs::Commit {
+            message: message.unwrap_or("metadata: merge").into(),
+            tree: merged_tree,
+            author: committer.into(),
+            committer: committer.into(),
+            encoding: None,
+            parents: vec![dest_id, source_id].into_iter().collect(),
+            extra_headers: Default::default(),
+        };
+        let commit_id = self.inner.write_object(&commit)?.detach();
+        self.inner.reference(
+            dest_ref.as_str(),
+            commit_id,
+            gix::refs::transaction::PreviousValue::ExistingMustMatch(gix::refs::Target::Object(
+                dest_id,
+            )),
+            message.unwrap_or("metadata: merge"),
+        )?;
+        Ok(commit_id)
+    }
+
     /// The underlying `gix` repository handle.
     pub fn repo(&self) -> &gix::Repository {
         &self.inner
