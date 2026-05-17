@@ -2,13 +2,10 @@
 
 *Porcelain for adding metadata to any object without rewriting history.*
 
-> [!CAUTION]
-> This project is being refactored with breaking changes that enable more conveient library and executor interfaces, and a Rust-first backend in [Gitoxide][gitoxide].
-> The last release is fully featured: see [`v0.3.0-rc1`][v0.3.0-rc1].
-> When this refactor reaches parity with the last release, this warning will be removed.
-
-[gitoxide]: https://github.com/GitoxideLabs/gitoxide
-[v0.3.0-rc1]: https://github.com/git-ents/git-metadata/releases/tag/git-metadata-v0.3.0-rc.1
+> [!NOTE]
+> This project is in need of testers!
+> Once enough testers have provided feedback, and the software's stability is demonstrated for daily usage in the wild, a major release will be published.
+> Until then, please expect beta software quality for all pre-major (`<=v1.0`) releases.
 
 ## Overview
 
