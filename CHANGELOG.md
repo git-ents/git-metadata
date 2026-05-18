@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.1](https://github.com/git-ents/git-metadata/compare/git-metadata-v0.4.0...git-metadata-v0.4.1) (2026-05-17)
+
+
+### chore
+
+* Pin next release ([f523db8](https://github.com/git-ents/git-metadata/commit/f523db8650d66d868b87ee112a6073d5402c2d59))
+
+
+### Documentation
+
+* Add code of conduct ([62cdabd](https://github.com/git-ents/git-metadata/commit/62cdabdaf0ee526256a5477835be2b4c4e61ee90))
+* Add contribution guide ([cb240be](https://github.com/git-ents/git-metadata/commit/cb240becb39f6a87e486f5757cd4e27e79f138cc))
+* Add note for testers in README ([f219c20](https://github.com/git-ents/git-metadata/commit/f219c205461985c6b3b1eaf2d15eb1a9ab7f1db1))
+* Add reference to code of conduct in README ([f71c62d](https://github.com/git-ents/git-metadata/commit/f71c62d61d77b2fdd45eaa52195832409eba39f3))
+* Add reference to contribution guide in README ([34502d5](https://github.com/git-ents/git-metadata/commit/34502d506c2bd9204c4f0e20dd7b467033f5a522))
+
 ## [0.4.0](https://github.com/git-ents/git-metadata/compare/git-metadata-v0.3.0...git-metadata-v0.4.0) (2026-05-17)
 
 
