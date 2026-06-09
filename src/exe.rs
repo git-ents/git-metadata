@@ -5,8 +5,6 @@
 //! return structured data; callers own formatting. Errors bubble up as
 //! [`anyhow::Error`] so the CLI can render them uniformly.
 
-#![allow(dead_code, unused_variables)]
-
 use std::path::Path;
 
 use anyhow::{Context, Result};
