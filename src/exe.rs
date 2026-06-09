@@ -465,6 +465,7 @@ impl Executor {
         }
     }
 
+    #[expect(dead_code, reason = "scaffolding for upcoming remove feature")]
     fn current_metadata_tree(&self, target: gix::ObjectId) -> Result<gix::ObjectId> {
         self.inner
             .find_metadata(Some(self.metadatas_ref()), target)
@@ -493,6 +494,7 @@ impl Executor {
     }
 }
 
+#[expect(dead_code, reason = "scaffolding for upcoming remove feature")]
 enum RemoveError {
     NotFound,
     NonTreeIntermediate(BString),
@@ -523,6 +525,7 @@ fn split_path(path: &str) -> Result<Vec<BString>> {
     Ok(segs)
 }
 
+#[expect(dead_code, reason = "scaffolding for upcoming remove feature")]
 fn decode_entries(repo: &gix::Repository, tree: gix::ObjectId) -> Result<Vec<Entry>> {
     let t = repo.find_tree(tree)?;
     let decoded = t.decode()?;
@@ -537,6 +540,7 @@ fn decode_entries(repo: &gix::Repository, tree: gix::ObjectId) -> Result<Vec<Ent
         .collect())
 }
 
+#[expect(dead_code, reason = "scaffolding for upcoming remove feature")]
 fn remove_path(
     repo: &gix::Repository,
     tree: gix::ObjectId,
