@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/git-ents/git-metadata/compare/git-metadata-v0.4.1...git-metadata-v0.4.2) (2026-06-13)
+
+
+### Bug Fixes
+
+* Remove tests from Cargo package metadata ([0e5c118](https://github.com/git-ents/git-metadata/commit/0e5c1184ce3bf8a8cb1920069f7bda9dd288c41c))
+
 ## [0.4.1](https://github.com/git-ents/git-metadata/compare/git-metadata-v0.4.0...git-metadata-v0.4.1) (2026-05-17)
 
 
