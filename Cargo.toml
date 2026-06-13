@@ -9,6 +9,7 @@ description = "Porcelain for adding metadata to any git object without rewriting
 repository = "https://github.com/git-ents/git-metadata"
 homepage = "https://github.com/git-ents/git-metadata"
 documentation = "https://docs.rs/git-metadata"
+include = ["src/**/*", "LICENSE-*", "README.md", "CHANGELOG.md", "!**/tests/**/*"]
 
 [[bin]]
 name = "git-metadata"
